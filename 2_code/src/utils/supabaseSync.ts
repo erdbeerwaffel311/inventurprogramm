@@ -1,5 +1,16 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { AppSettings, InventoryItem, InventoryTransaction } from '../types';
+import { AppSettings, CategoryInfo, InventoryItem, InventoryTransaction } from '../types';
+
+export const CONFIG_ROW_ID = '__keller_config__';
+
+export interface CloudConfigPayload {
+  clubName: string;
+  adminPassword: string;
+  categories: CategoryInfo[];
+  deletedCategoryIds?: string[];
+  commonEvents: string[];
+  updatedAt: string;
+}
 
 export const SUPABASE_SETUP_SQL = `-- Dieses Skript im Supabase "SQL Editor" einfügen und auf "Run" klicken:
 
@@ -73,14 +84,16 @@ export function getSupabaseClient(settings: AppSettings): SupabaseClient | null 
   }
 }
 
-export async function pullFromSupabase(
-  settings: AppSettings
-): Promise<{ items: InventoryItem[]; transactions: InventoryTransaction[] } | null> {
+export async function pullFromSupabase(settings: AppSettings): Promise<{
+  items: InventoryItem[];
+  transactions: InventoryTransaction[];
+  config: CloudConfigPayload | null;
+} | null> {
   const client = getSupabaseClient(settings);
   if (!client || !navigator.onLine) return null;
 
   const [itemsRes, txRes] = await Promise.all([
-    client.from('keller_items').select('payload').order('name', { ascending: true }),
+    client.from('keller_items').select('id, payload').order('name', { ascending: true }),
     client
       .from('keller_transactions')
       .select('payload')
@@ -92,15 +105,57 @@ export async function pullFromSupabase(
     throw new Error(itemsRes.error?.message || txRes.error?.message || 'Supabase Abruf-Fehler');
   }
 
-  const items: InventoryItem[] = (itemsRes.data || [])
-    .map((r: { payload: InventoryItem }) => r.payload)
-    .filter(Boolean);
+  let config: CloudConfigPayload | null = null;
+  const items: InventoryItem[] = [];
+
+  for (const row of itemsRes.data || []) {
+    if (row.id === CONFIG_ROW_ID) {
+      config = row.payload as CloudConfigPayload;
+    } else if (row.payload) {
+      items.push(row.payload as InventoryItem);
+    }
+  }
 
   const transactions: InventoryTransaction[] = (txRes.data || [])
     .map((r: { payload: InventoryTransaction }) => ({ ...r.payload, synced: true }))
     .filter(Boolean);
 
-  return { items, transactions };
+  return { items, transactions, config };
+}
+
+export async function pushConfigToSupabase(
+  settings: AppSettings,
+  deletedCategoryIds: string[] = []
+): Promise<boolean> {
+  const client = getSupabaseClient(settings);
+  if (!client || !navigator.onLine) return false;
+
+  const now = new Date().toISOString();
+  const configPayload: CloudConfigPayload = {
+    clubName: settings.clubName,
+    adminPassword: settings.adminPassword,
+    categories: settings.categories,
+    deletedCategoryIds,
+    commonEvents: settings.commonEvents,
+    updatedAt: now,
+  };
+
+  const { error } = await client.from('keller_items').upsert(
+    [
+      {
+        id: CONFIG_ROW_ID,
+        name: '__keller_config__',
+        category: '__system__',
+        quantity: 0,
+        updated_at: now,
+        payload: configPayload,
+      },
+    ],
+    { onConflict: 'id' }
+  );
+
+  if (error) throw new Error(error.message);
+  return true;
 }
 
 export async function pushToSupabase(
@@ -111,14 +166,33 @@ export async function pushToSupabase(
   const client = getSupabaseClient(settings);
   if (!client || !navigator.onLine) return false;
 
-  const itemRows = items.map((item) => ({
-    id: item.id,
-    name: item.name,
-    category: item.category,
-    quantity: item.quantity,
-    updated_at: item.updatedAt || new Date().toISOString(),
-    payload: item,
-  }));
+  const now = new Date().toISOString();
+  const configPayload: CloudConfigPayload = {
+    clubName: settings.clubName,
+    adminPassword: settings.adminPassword,
+    categories: settings.categories,
+    commonEvents: settings.commonEvents,
+    updatedAt: now,
+  };
+
+  const itemRows = [
+    {
+      id: CONFIG_ROW_ID,
+      name: '__keller_config__',
+      category: '__system__',
+      quantity: 0,
+      updated_at: now,
+      payload: configPayload,
+    },
+    ...items.map((item) => ({
+      id: item.id,
+      name: item.name,
+      category: item.category,
+      quantity: item.quantity,
+      updated_at: item.updatedAt || now,
+      payload: item,
+    })),
+  ];
 
   const unsyncedTxs = transactions.filter((tx) => !tx.synced);
   const txRows = (unsyncedTxs.length > 0 ? unsyncedTxs : transactions.slice(0, 50)).map((tx) => ({

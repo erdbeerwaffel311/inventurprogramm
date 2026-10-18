@@ -20,6 +20,7 @@ import {
   deleteItemFromSupabase,
   normalizeSupabaseUrl,
   pullFromSupabase,
+  pushConfigToSupabase,
   pushToSupabase,
 } from './utils/supabaseSync';
 import { ActiveTab, Header } from './components/Header';
@@ -153,14 +154,32 @@ export const App: React.FC = () => {
           setItems(cleanRemoteItems);
           setTransactions(cleanRemoteTxs);
 
-          if (cleanRemoteItems.length > 0) {
-            // Automatisch eigene Kategorien übernehmen, falls auf einem anderen Gerät angelegt
-            const currentCats = [...(currentSettings.categories || DEFAULT_SETTINGS.categories)];
-            let catsChanged = false;
+          const defaultCatIds = new Set(['drinks_food', 'consumables', 'equipment']);
+          const localCats = currentSettings.categories || DEFAULT_SETTINGS.categories;
+
+          if (remote.config && remote.config.categories?.length) {
+            const deletedSet = new Set(remote.config.deletedCategoryIds || []);
+            const mergedCats = [...remote.config.categories];
+            let localHadNewCustomCats = false;
+
+            // Falls auf diesem Gerät (z. B. Handy) bereits eigene Kategorien angelegt wurden,
+            // die noch nicht in der Cloud waren, führen wir sie zusammen und laden sie hoch:
+            for (const lCat of localCats) {
+              if (
+                !defaultCatIds.has(lCat.id) &&
+                !deletedSet.has(lCat.id) &&
+                !mergedCats.some((rc) => rc.id === lCat.id)
+              ) {
+                mergedCats.push(lCat);
+                localHadNewCustomCats = true;
+              }
+            }
+
+            // Auch Kategorien aus vorhandenen Cloud-Artikeln berücksichtigen
             for (const rItem of cleanRemoteItems) {
-              if (rItem.category && !currentCats.some((c) => c.id === rItem.category)) {
+              if (rItem.category && !mergedCats.some((c) => c.id === rItem.category)) {
                 const label = rItem.categoryLabel || rItem.category;
-                currentCats.push({
+                mergedCats.push({
                   id: rItem.category,
                   label,
                   shortLabel: label.length > 18 ? label.slice(0, 16) + '…' : label,
@@ -168,11 +187,31 @@ export const App: React.FC = () => {
                   color: 'violet',
                   defaultReturnable: rItem.isReturnable,
                 });
-                catsChanged = true;
+                localHadNewCustomCats = true;
               }
             }
-            if (catsChanged) {
-              setSettings((prev) => ({ ...prev, categories: currentCats }));
+
+            const updatedSettings: AppSettings = {
+              ...currentSettings,
+              clubName: remote.config.clubName || currentSettings.clubName,
+              adminPassword: remote.config.adminPassword || currentSettings.adminPassword,
+              commonEvents: remote.config.commonEvents?.length
+                ? remote.config.commonEvents
+                : currentSettings.commonEvents,
+              categories: mergedCats,
+            };
+
+            setSettings(updatedSettings);
+
+            if (localHadNewCustomCats) {
+              await pushConfigToSupabase(updatedSettings, remote.config.deletedCategoryIds || []);
+            }
+          } else {
+            // Noch kein __keller_config__ in Supabase vorhanden:
+            // Falls dieses Gerät eigene Kategorien hat, sofort in die Cloud hochladen!
+            const hasLocalCustomCats = localCats.some((c) => !defaultCatIds.has(c.id));
+            if (hasLocalCustomCats) {
+              await pushConfigToSupabase(currentSettings);
             }
           }
         }
@@ -185,7 +224,7 @@ export const App: React.FC = () => {
     [items, transactions, settings]
   );
 
-  // Online / Offline Listener + automatischer Sync beim Verlassen des Kellers
+  // Online / Offline Listener + automatischer Sync beim Verlassen des Kellers + Live-Sync alle 15s
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
@@ -198,11 +237,18 @@ export const App: React.FC = () => {
       }
     };
 
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible' && navigator.onLine) {
+        syncWithCloud();
+      }
+    }, 15000);
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     document.addEventListener('visibilitychange', handleVisibility);
 
     return () => {
+      window.clearInterval(intervalId);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       document.removeEventListener('visibilitychange', handleVisibility);
@@ -409,8 +455,9 @@ export const App: React.FC = () => {
     newCategories: CategoryInfo[],
     summaryNote: string
   ) {
+    const nextSettings = { ...settings, categories: newCategories };
     setItems(newItems);
-    setSettings((prev) => ({ ...prev, categories: newCategories }));
+    setSettings(nextSettings);
     const invTx: InventoryTransaction = {
       id: `tx-csv-${Date.now()}`,
       timestamp: new Date().toISOString(),
@@ -425,7 +472,7 @@ export const App: React.FC = () => {
     const nextTxs = [invTx, ...transactions];
     setTransactions(nextTxs);
     if (hasCloudConfig && navigator.onLine) {
-      pushToSupabase(settings, newItems, nextTxs).catch(() => {});
+      pushToSupabase(nextSettings, newItems, nextTxs).catch(() => {});
     }
   }
 
@@ -498,10 +545,12 @@ export const App: React.FC = () => {
             onUpsertItem={handleUpsertItem}
             onDeleteItem={handleDeleteItem}
             onBulkImportItems={handleBulkImportItems}
-            onUpdateSettings={(newSettings) => {
+            onUpdateSettings={(newSettings, deletedCatId) => {
               setSettings(newSettings);
-              if (newSettings.supabaseUrl && newSettings.supabaseAnonKey) {
-                syncWithCloud(items, transactions, newSettings);
+              if (newSettings.supabaseUrl && newSettings.supabaseAnonKey && navigator.onLine) {
+                pushConfigToSupabase(newSettings, deletedCatId ? [deletedCatId] : [])
+                  .then(() => syncWithCloud(items, transactions, newSettings))
+                  .catch(() => {});
               }
             }}
             onManualSync={() => syncWithCloud()}

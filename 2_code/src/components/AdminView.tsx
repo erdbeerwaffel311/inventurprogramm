@@ -61,7 +61,7 @@ interface AdminViewProps {
     newCategories: CategoryInfo[],
     summaryNote: string
   ) => void;
-  onUpdateSettings: (newSettings: AppSettings) => void;
+  onUpdateSettings: (newSettings: AppSettings, deletedCatId?: string) => void;
   onManualSync: () => void;
   isSyncing: boolean;
 }
@@ -239,7 +239,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     const nextCategories = activeCategories.filter((c) => c.id !== catId);
     const nextSettings = { ...settings, categories: nextCategories };
     setSettingsForm(nextSettings);
-    onUpdateSettings(nextSettings);
+    onUpdateSettings(nextSettings, catId);
     showBanner(`Kategorie „${targetCat?.label || catId}“ wurde gelöscht.`);
   }
 
@@ -428,13 +428,13 @@ export const AdminView: React.FC<AdminViewProps> = ({
               type="password"
               value={passwordInput}
               onChange={(e) => setPasswordInput(e.target.value)}
-              placeholder="Passwort (Standard: admin)"
+              placeholder="Passwort"
               autoFocus
               className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-sky-500 focus:outline-none text-sm text-white"
             />
             {passwordError && (
               <p className="text-xs text-rose-400 mt-1.5">
-                Falsches Passwort. (Standard-Passwort bei Erststart lautet: <strong>admin</strong>)
+                Falsches Passwort.
               </p>
             )}
           </div>

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vereinskeller-cache-v1';
+const CACHE_NAME = 'vereinskeller-cache-v3';
 const ASSETS_TO_CACHE = ['./', './index.html', './icon.svg', './manifest.webmanifest'];
 
 self.addEventListener('install', (event) => {
