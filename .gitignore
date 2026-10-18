@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+2_code/node_modules/
+
+# macOS & System
+.DS_Store
+**/.DS_Store
+
+# Logs & Local env
+*.log
+.env
+.env.local
+2_code/.env
+2_code/.env.local

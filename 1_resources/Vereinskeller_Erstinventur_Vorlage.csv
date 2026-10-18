@@ -1,0 +1,15 @@
+﻿Name;Kategorie;Bestand (Haupteinheit);Haupteinheit;Untereinheit;Faktor Untereinheit;Mindestbestand;Sollbestand;Lagerort;Leihgerät (Rückgabepflicht);Teilmengen erlaubt;Suchbegriffe / Synonyme
+Pilsener Bier (0,5l);Getränke & Lebensmittel;6;Kiste;Flasche;20;3;8;Getränkekeller Regal A;Nein;Ja;bier, pils, pilsener, kasten bier, kiste bier
+Cola / Spezi (0,5l);Getränke & Lebensmittel;4,5;Kiste;Flasche;20;2;6;Getränkekeller Regal A;Nein;Ja;cola, spezi, limo, mezzo mix
+Mineralwasser Sprudel (0,7l);Getränke & Lebensmittel;5;Kiste;Flasche;12;3;6;Getränkekeller Regal B;Nein;Ja;wasser, sprudel, mineralwasser
+Apfelschorle (0,5l);Getränke & Lebensmittel;1,75;Kiste;Flasche;20;2;4;Getränkekeller Regal B;Nein;Ja;apfelschorle, schorle, apfelsaft
+Kaffee (500g Packung);Getränke & Lebensmittel;2,5;Packung;;;2;4;Vorratsschrank 1;Nein;Ja;kaffee, filterkaffee, kaffeebohnen
+Gaffa-Tape (Gewebeband);Verbrauchsmaterial;3,5;Rolle;;;2;5;Werkzeugschrank Fach 2;Nein;Ja;gaffa, panzertape, gewebeband, klebeband
+Müllsäcke 120L (Schwerlast);Verbrauchsmaterial;2;Rolle;Sack;20;2;5;Putzschrank;Nein;Ja;müllsäcke, müllbeutel, blaue säcke
+Servietten (250er Pack);Verbrauchsmaterial;1;Packung;;;2;5;Vorratsschrank 2;Nein;Ja;servietten, papierservietten
+Spülmittel / Gastro-Reiniger;Verbrauchsmaterial;2,5;Flasche;;;1;3;Putzschrank;Nein;Ja;spüli, spülmittel, reiniger, putzmittel
+Bierzeltgarnitur (Tisch + 2 Bänke);Werkzeug, Technik & Inventar;8;Garnitur;;;8;10;Lagerraum Hinten;Ja;Nein;bierzeltgarnitur, biertisch, bierbank, garnitur
+Kabeltrommel 50m (Outdoor);Werkzeug, Technik & Inventar;3;Stück;;;3;4;Technikregal;Ja;Nein;kabeltrommel, verlängerungskabel, stromkabel
+Akkuschrauber + Bit-Set (Koffer);Werkzeug, Technik & Inventar;2;Set;;;2;2;Werkzeugschrank Fach 1;Ja;Nein;akkuschrauber, schrauber, werkzeugkoffer
+Mobile Musikbox / PA-Lautsprecher;Werkzeug, Technik & Inventar;1;Stück;;;1;2;Technikregal;Ja;Nein;musikbox, lautsprecher, soundboks, pa
+Stehtisch (klappbar);Werkzeug, Technik & Inventar;6;Stück;;;6;6;Lagerraum Hinten;Ja;Nein;stehtisch, stehtische, bartisch
