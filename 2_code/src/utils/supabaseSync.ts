@@ -156,7 +156,13 @@ export async function deleteItemFromSupabase(settings: AppSettings, itemId: stri
  * gehängt werden kann, damit Vereinsmitglieder mit 1 Scan sofort mit derselben Datenbank verbunden sind.
  */
 export function buildShareableAppUrl(settings: AppSettings): string {
-  const baseUrl = window.location.origin + window.location.pathname;
+  const isNativeOrLocal =
+    window.location.protocol === 'capacitor:' ||
+    window.location.protocol === 'file:' ||
+    window.location.hostname === 'localhost';
+  const baseUrl = isNativeOrLocal
+    ? 'https://erdbeerwaffel311.github.io/inventurprogramm/'
+    : window.location.origin + window.location.pathname;
   const params = new URLSearchParams();
   if (settings.clubName) params.set('club', settings.clubName);
   const cleanUrl = normalizeSupabaseUrl(settings.supabaseUrl);

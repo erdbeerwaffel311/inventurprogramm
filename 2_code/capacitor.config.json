@@ -1,0 +1,8 @@
+{
+  "appId": "de.vereinskeller.inventur",
+  "appName": "Vereinskeller",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

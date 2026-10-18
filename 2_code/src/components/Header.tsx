@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Cloud,
   AlertTriangle,
+  Smartphone,
 } from 'lucide-react';
 
 export type ActiveTab = 'booking' | 'history' | 'shopping' | 'admin';
@@ -38,6 +39,9 @@ export const Header: React.FC<HeaderProps> = ({
   isSyncing,
   onManualSync,
 }) => {
+  const isInsideNativeApk =
+    window.location.protocol === 'capacitor:' || window.location.hostname === 'localhost';
+
   return (
     <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur border-b border-slate-800 no-print">
       <div className="max-w-5xl mx-auto px-3 sm:px-6">
@@ -55,8 +59,20 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* Sync / Connectivity Badge */}
+          {/* Sync / Connectivity Badge & APK Download */}
           <div className="flex items-center gap-2">
+            {!isInsideNativeApk && (
+              <a
+                href="https://erdbeerwaffel311.github.io/inventurprogramm/Vereinskeller.apk"
+                download="Vereinskeller.apk"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 text-xs font-medium transition"
+                title="Android-App (.apk) direkt herunterladen und installieren"
+              >
+                <Smartphone className="w-3.5 h-3.5 shrink-0" />
+                <span className="hidden sm:inline">Android .apk</span>
+                <span className="sm:hidden">.apk</span>
+              </a>
+            )}
             {!isOnline ? (
               <div
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-amber-500/15 border border-amber-500/40 text-amber-300 text-xs font-medium"

@@ -1,4 +1,4 @@
-name: Deploy Vereinskeller App to GitHub Pages
+name: Deploy Vereinskeller App & Build Android APK
 
 on:
   push:
@@ -31,16 +31,36 @@ jobs:
           cache: "npm"
           cache-dependency-path: 2_code/package-lock.json
 
-      - name: Install Dependencies & Build
+      - name: Setup Java 21 for Android APK Build
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Install Dependencies & Build Web App
         working-directory: 2_code
         run: |
           npm ci
           npm run build
+          npx cap sync android
+
+      - name: Build Android APK (Vereinskeller.apk)
+        working-directory: 2_code/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug
+          cp app/build/outputs/apk/debug/app-debug.apk ../dist/Vereinskeller.apk
+
+      - name: Upload Android APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Vereinskeller-Android-APK
+          path: 2_code/dist/Vereinskeller.apk
 
       - name: Configure Pages
         uses: actions/configure-pages@v5
 
-      - name: Upload Artifact
+      - name: Upload Pages Artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: "2_code/dist"
