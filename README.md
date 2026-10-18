@@ -32,3 +32,4 @@ Dieses Repository ist bereits fertig konfiguriert für **GitHub Pages** (`.githu
 3. **Kostenloses Hosting aktivieren**:
    - **Option A (GitHub Pages)**: Gehe in deinem GitHub-Repository auf *Settings -> Pages* und wähle unter *Build and deployment -> Source* die Option **GitHub Actions**. Nach ca. 1 Minute ist deine App online!
    - **Option B (Vercel / Netlify)**: Importiere das GitHub-Repository kostenlos auf [vercel.com](https://vercel.com) oder [netlify.com](https://netlify.com) – die Einstellungen aus `vercel.json` bzw. `netlify.toml` werden automatisch erkannt.
+# inventurprogramm
