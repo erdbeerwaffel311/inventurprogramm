@@ -16,6 +16,7 @@ import {
 import { roundStock, toPrimaryUnitQuantity } from './utils/units';
 import {
   deleteItemFromSupabase,
+  normalizeSupabaseUrl,
   pullFromSupabase,
   pushToSupabase,
 } from './utils/supabaseSync';
@@ -41,6 +42,9 @@ export const App: React.FC = () => {
       const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       const parsed = saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : { ...DEFAULT_SETTINGS };
 
+      if (!parsed.supabaseUrl) parsed.supabaseUrl = DEFAULT_SETTINGS.supabaseUrl;
+      if (!parsed.supabaseAnonKey) parsed.supabaseAnonKey = DEFAULT_SETTINGS.supabaseAnonKey;
+
       // Prüfe QR-Code / Einladungslink-Parameter (?dbUrl=...&dbKey=...&club=...)
       const params = new URLSearchParams(window.location.search);
       const urlDb = params.get('dbUrl');
@@ -54,8 +58,12 @@ export const App: React.FC = () => {
       if (clubParam) {
         parsed.clubName = clubParam;
       }
+
+      // Automatisch "/rest/v1/" am Ende der URL entfernen, falls mitkopiert
+      parsed.supabaseUrl = normalizeSupabaseUrl(parsed.supabaseUrl);
+
+      localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
       if (urlDb || keyDb || clubParam) {
-        localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
         window.history.replaceState({}, document.title, window.location.pathname);
       }
 

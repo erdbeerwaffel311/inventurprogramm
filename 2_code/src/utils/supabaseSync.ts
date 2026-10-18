@@ -22,24 +22,38 @@ create table if not exists public.keller_transactions (
 alter table public.keller_items enable row level security;
 alter table public.keller_transactions enable row level security;
 
+grant usage on schema public to anon, authenticated;
+grant all on table public.keller_items to anon, authenticated;
+grant all on table public.keller_transactions to anon, authenticated;
+
 drop policy if exists "Vereinskeller Items Vollzugriff" on public.keller_items;
 create policy "Vereinskeller Items Vollzugriff"
   on public.keller_items for all
+  to anon, authenticated
   using (true)
   with check (true);
 
 drop policy if exists "Vereinskeller Buchungen Vollzugriff" on public.keller_transactions;
 create policy "Vereinskeller Buchungen Vollzugriff"
   on public.keller_transactions for all
+  to anon, authenticated
   using (true)
   with check (true);
 `;
+
+export function normalizeSupabaseUrl(rawUrl: string | undefined): string {
+  if (!rawUrl) return '';
+  return rawUrl
+    .trim()
+    .replace(/\/rest\/v1\/?.*$/i, '')
+    .replace(/\/+$/, '');
+}
 
 let cachedClient: SupabaseClient | null = null;
 let cachedKey = '';
 
 export function getSupabaseClient(settings: AppSettings): SupabaseClient | null {
-  const url = settings.supabaseUrl?.trim();
+  const url = normalizeSupabaseUrl(settings.supabaseUrl);
   const key = settings.supabaseAnonKey?.trim();
   if (!url || !key) return null;
 
@@ -145,7 +159,8 @@ export function buildShareableAppUrl(settings: AppSettings): string {
   const baseUrl = window.location.origin + window.location.pathname;
   const params = new URLSearchParams();
   if (settings.clubName) params.set('club', settings.clubName);
-  if (settings.supabaseUrl) params.set('dbUrl', settings.supabaseUrl);
+  const cleanUrl = normalizeSupabaseUrl(settings.supabaseUrl);
+  if (cleanUrl) params.set('dbUrl', cleanUrl);
   if (settings.supabaseAnonKey) params.set('dbKey', settings.supabaseAnonKey);
 
   const query = params.toString();

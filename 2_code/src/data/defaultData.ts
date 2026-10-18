@@ -28,8 +28,9 @@ export const CATEGORIES: CategoryInfo[] = [
 export const DEFAULT_SETTINGS: AppSettings = {
   clubName: 'Vereinskeller',
   adminPassword: 'admin',
-  supabaseUrl: import.meta.env.VITE_SUPABASE_URL || '',
-  supabaseAnonKey: import.meta.env.VITE_SUPABASE_ANON_KEY || '',
+  supabaseUrl: import.meta.env.VITE_SUPABASE_URL || 'https://zdduvvluqairhnbdbunk.supabase.co',
+  supabaseAnonKey:
+    import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_CEjKQudAlYxYtTvykEwDxw_E4KvyUhC',
   aiProvider: 'gemini',
   aiApiKey: '',
   commonEvents: ['Sommerfest', 'Vereinsabend', 'Arbeitseinsatz', 'Vorstandssitzung', 'Turnier / Spieltag'],

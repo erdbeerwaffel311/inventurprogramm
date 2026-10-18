@@ -20,14 +20,20 @@ create table if not exists public.keller_transactions (
 alter table public.keller_items enable row level security;
 alter table public.keller_transactions enable row level security;
 
+grant usage on schema public to anon, authenticated;
+grant all on table public.keller_items to anon, authenticated;
+grant all on table public.keller_transactions to anon, authenticated;
+
 drop policy if exists "Vereinskeller Items Vollzugriff" on public.keller_items;
 create policy "Vereinskeller Items Vollzugriff"
   on public.keller_items for all
+  to anon, authenticated
   using (true)
   with check (true);
 
 drop policy if exists "Vereinskeller Buchungen Vollzugriff" on public.keller_transactions;
 create policy "Vereinskeller Buchungen Vollzugriff"
   on public.keller_transactions for all
+  to anon, authenticated
   using (true)
   with check (true);
