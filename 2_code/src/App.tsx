@@ -12,6 +12,8 @@ import {
   DEFAULT_ITEMS,
   DEFAULT_SETTINGS,
   DEFAULT_TRANSACTIONS,
+  LEGACY_DEMO_ITEM_IDS,
+  LEGACY_DEMO_TX_IDS,
 } from './data/defaultData';
 import { roundStock, toPrimaryUnitQuantity } from './utils/units';
 import {
@@ -27,8 +29,8 @@ import { ShoppingListView } from './components/ShoppingListView';
 import { AdminView } from './components/AdminView';
 
 const STORAGE_KEYS = {
-  ITEMS: 'vk_inventory_items_v1',
-  TRANSACTIONS: 'vk_inventory_transactions_v1',
+  ITEMS: 'vk_inventory_items_v2',
+  TRANSACTIONS: 'vk_inventory_transactions_v2',
   SETTINGS: 'vk_app_settings_v1',
 };
 
@@ -75,8 +77,10 @@ export const App: React.FC = () => {
 
   const [items, setItems] = useState<InventoryItem[]>(() => {
     try {
+      localStorage.removeItem('vk_inventory_items_v1');
       const saved = localStorage.getItem(STORAGE_KEYS.ITEMS);
-      return saved ? JSON.parse(saved) : DEFAULT_ITEMS;
+      const parsed: InventoryItem[] = saved ? JSON.parse(saved) : DEFAULT_ITEMS;
+      return parsed.filter((i) => !LEGACY_DEMO_ITEM_IDS.has(i.id));
     } catch {
       return DEFAULT_ITEMS;
     }
@@ -84,8 +88,10 @@ export const App: React.FC = () => {
 
   const [transactions, setTransactions] = useState<InventoryTransaction[]>(() => {
     try {
+      localStorage.removeItem('vk_inventory_transactions_v1');
       const saved = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
-      return saved ? JSON.parse(saved) : DEFAULT_TRANSACTIONS;
+      const parsed: InventoryTransaction[] = saved ? JSON.parse(saved) : DEFAULT_TRANSACTIONS;
+      return parsed.filter((t) => !LEGACY_DEMO_TX_IDS.has(t.id));
     } catch {
       return DEFAULT_TRANSACTIONS;
     }
@@ -137,12 +143,21 @@ export const App: React.FC = () => {
 
         const remote = await pullFromSupabase(currentSettings);
         if (remote) {
-          if (remote.items.length > 0) {
-            setItems(remote.items);
+          const cleanRemoteItems = remote.items.filter(
+            (i) => !LEGACY_DEMO_ITEM_IDS.has(i.id)
+          );
+          const cleanRemoteTxs = remote.transactions.filter(
+            (t) => !LEGACY_DEMO_TX_IDS.has(t.id)
+          );
+
+          setItems(cleanRemoteItems);
+          setTransactions(cleanRemoteTxs);
+
+          if (cleanRemoteItems.length > 0) {
             // Automatisch eigene Kategorien übernehmen, falls auf einem anderen Gerät angelegt
             const currentCats = [...(currentSettings.categories || DEFAULT_SETTINGS.categories)];
             let catsChanged = false;
-            for (const rItem of remote.items) {
+            for (const rItem of cleanRemoteItems) {
               if (rItem.category && !currentCats.some((c) => c.id === rItem.category)) {
                 const label = rItem.categoryLabel || rItem.category;
                 currentCats.push({
@@ -159,12 +174,6 @@ export const App: React.FC = () => {
             if (catsChanged) {
               setSettings((prev) => ({ ...prev, categories: currentCats }));
             }
-          } else {
-            // Falls die Cloud-Tabelle noch komplett leer ist, initialen lokalen Bestand hochladen
-            await pushToSupabase(currentSettings, currentItems, currentTxs);
-          }
-          if (remote.transactions.length > 0) {
-            setTransactions(remote.transactions);
           }
         }
       } catch {

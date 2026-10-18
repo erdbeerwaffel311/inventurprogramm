@@ -12,3 +12,6 @@ node_modules/
 .env.local
 2_code/.env
 2_code/.env.local
+
+# Local APK binary (built by GitHub Actions)
+*.apk

@@ -961,6 +961,20 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
           </div>
 
           {/* Artikel-Karten */}
+          {filteredItems.length === 0 ? (
+            <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-8 text-center space-y-2">
+              <p className="font-semibold text-white text-sm sm:text-base">
+                {items.length === 0
+                  ? 'Noch keine Artikel im Vereinskeller angelegt.'
+                  : 'Keine Artikel für diesen Filter gefunden.'}
+              </p>
+              <p className="text-xs text-slate-400">
+                {items.length === 0
+                  ? 'Wechsle oben auf „Admin / Inventur“, um deine eigenen Artikel anzulegen oder per CSV/Excel zu importieren.'
+                  : 'Probiere eine andere Kategorie oder ändere deinen Suchbegriff.'}
+              </p>
+            </div>
+          ) : null}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             {filteredItems.map((item) => {
               const selectedUnit = getSelectedUnit(item);
