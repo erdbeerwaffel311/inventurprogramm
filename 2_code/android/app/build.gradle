@@ -7,8 +7,9 @@ android {
         applicationId "de.vereinskeller.inventur"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        def runNum = System.getenv("GITHUB_RUN_NUMBER")
+        versionCode runNum ? (100 + runNum.toInteger()) : 100
+        versionName "1." + (runNum ?: "0")
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -16,8 +17,21 @@ android {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    signingConfigs {
+        vereinskellerSigning {
+            storeFile file("vereinskeller.keystore")
+            storePassword "vereinskeller123"
+            keyAlias "vereinskeller"
+            keyPassword "vereinskeller123"
+            storeType "PKCS12"
+        }
+    }
     buildTypes {
+        debug {
+            signingConfig signingConfigs.vereinskellerSigning
+        }
         release {
+            signingConfig signingConfigs.vereinskellerSigning
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }

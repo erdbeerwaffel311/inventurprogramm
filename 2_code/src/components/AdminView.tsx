@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Lock,
   Unlock,
@@ -21,6 +21,9 @@ import {
   CheckCircle2,
   FolderPlus,
   Tag,
+  Mail,
+  ShieldCheck,
+  KeyRound,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
@@ -44,7 +47,13 @@ import {
   parseInventoryCsv,
   slugifyCategoryId,
 } from '../utils/csvHelper';
-import { buildShareableAppUrl, SUPABASE_SETUP_SQL } from '../utils/supabaseSync';
+import {
+  buildShareableAppUrl,
+  getSupabaseClient,
+  sendAdmin2FAEmail,
+  SUPABASE_SETUP_SQL,
+  verifyAdmin2FACode,
+} from '../utils/supabaseSync';
 
 interface AdminViewProps {
   items: InventoryItem[];
@@ -137,6 +146,138 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const [settingsForm, setSettingsForm] = useState<AppSettings>(settings);
   const [copiedSql, setCopiedSql] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  // State für 2FA-Schutz (Admin-Passwort & 2FA-E-Mail-Adresse)
+  const [initial2FAEmailInput, setInitial2FAEmailInput] = useState(settings.adminEmail || '');
+  const [twoFactorStage, setTwoFactorStage] = useState<'idle' | 'code_sent' | 'verified'>('idle');
+  const [twoFactorCodeInput, setTwoFactorCodeInput] = useState('');
+  const [twoFactorNewPassword, setTwoFactorNewPassword] = useState('');
+  const [twoFactorNewEmail, setTwoFactorNewEmail] = useState(settings.adminEmail || '');
+  const [twoFactorLoading, setTwoFactorLoading] = useState(false);
+  const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSettingsForm(settings);
+    if (settings.adminEmail) {
+      setTwoFactorNewEmail(settings.adminEmail);
+    }
+  }, [settings]);
+
+  // Automatische Erkennung, falls der Nutzer auf den 2FA-Bestätigungslink in der E-Mail geklickt hat
+  useEffect(() => {
+    const client = getSupabaseClient(settings);
+    if (!client || !settings.adminEmail) return;
+
+    const { data: sub } = client.auth.onAuthStateChange((event, session) => {
+      if (
+        (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') &&
+        session?.user?.email?.toLowerCase() === settings.adminEmail?.trim().toLowerCase()
+      ) {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('2fa') === 'verify' || window.location.hash.includes('access_token')) {
+          setTwoFactorStage('verified');
+          setTwoFactorNewEmail(settings.adminEmail || '');
+          setAdminSubTab('settings');
+          if (!isUnlocked) {
+            onUnlock();
+          }
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      }
+    });
+
+    return () => {
+      sub.subscription.unsubscribe();
+    };
+  }, [settings, isUnlocked]);
+
+  async function handleRequest2FACode() {
+    if (!settings.adminEmail?.trim()) return;
+    setTwoFactorLoading(true);
+    setTwoFactorError(null);
+    try {
+      await sendAdmin2FAEmail(settings, settings.adminEmail);
+      setTwoFactorStage('code_sent');
+      setTwoFactorNewEmail(settings.adminEmail);
+      setTwoFactorNewPassword('');
+      showBanner(`2FA-Bestätigungs-E-Mail wurde an ${settings.adminEmail} gesendet!`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Fehler beim Senden der 2FA-E-Mail.';
+      setTwoFactorError(msg);
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  }
+
+  async function handleVerify2FACode(e: React.FormEvent) {
+    e.preventDefault();
+    if (!settings.adminEmail?.trim() || !twoFactorCodeInput.trim()) return;
+    setTwoFactorLoading(true);
+    setTwoFactorError(null);
+    try {
+      const ok = await verifyAdmin2FACode(settings, settings.adminEmail, twoFactorCodeInput);
+      if (ok) {
+        setTwoFactorStage('verified');
+        setTwoFactorCodeInput('');
+        setTwoFactorError(null);
+        showBanner('2FA erfolgreich bestätigt! Du kannst Passwort und 2FA-E-Mail jetzt ändern.');
+      } else {
+        setTwoFactorError(
+          'Ungültiger oder abgelaufener Code. Bitte prüfe den Zahlencode oder füge den Bestätigungs-Link aus der E-Mail ein.'
+        );
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : '2FA-Prüfung fehlgeschlagen.';
+      setTwoFactorError(msg);
+    } finally {
+      setTwoFactorLoading(false);
+    }
+  }
+
+  function handleSave2FAProtectedChanges(e: React.FormEvent) {
+    e.preventDefault();
+    if (twoFactorStage !== 'verified') return;
+
+    const nextEmail = twoFactorNewEmail.trim();
+    if (!nextEmail || !nextEmail.includes('@')) {
+      setTwoFactorError('Bitte eine gültige 2FA-E-Mail-Adresse eingeben.');
+      return;
+    }
+
+    const nextPassword = twoFactorNewPassword.trim()
+      ? twoFactorNewPassword.trim()
+      : settings.adminPassword;
+
+    const updated: AppSettings = {
+      ...settingsForm,
+      adminPassword: nextPassword,
+      adminEmail: nextEmail,
+    };
+
+    setSettingsForm(updated);
+    onUpdateSettings(updated);
+    setTwoFactorStage('idle');
+    setTwoFactorNewPassword('');
+    setTwoFactorError(null);
+    showBanner('Admin-Passwort und 2FA-E-Mail-Adresse wurden sicher aktualisiert!');
+  }
+
+  function handleSaveInitial2FAEmail() {
+    const clean = initial2FAEmailInput.trim();
+    if (!clean || !clean.includes('@')) {
+      setTwoFactorError('Bitte eine gültige E-Mail-Adresse für den 2FA-Schutz eingeben.');
+      return;
+    }
+    const updated: AppSettings = {
+      ...settingsForm,
+      adminPassword: settings.adminPassword,
+      adminEmail: clean,
+    };
+    setSettingsForm(updated);
+    onUpdateSettings(updated);
+    setTwoFactorError(null);
+    showBanner(`2FA-Schutz mit E-Mail „${clean}“ erfolgreich aktiviert!`);
+  }
 
   function showBanner(msg: string) {
     setStatusMessage(msg);
@@ -1256,46 +1397,231 @@ export const AdminView: React.FC<AdminViewProps> = ({
               </div>
             </div>
 
-            {/* Vereinsname & Admin-Passwort */}
+            {/* Vereinsname */}
             <div className="pt-4 border-t border-slate-800 space-y-3">
-              <h4 className="font-bold text-white text-sm">Vereinsname & Admin-Passwort</h4>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs text-slate-300 mb-1">Name des Vereins / Kellers</label>
-                  <input
-                    type="text"
-                    value={settingsForm.clubName}
-                    onChange={(e) =>
-                      setSettingsForm({ ...settingsForm, clubName: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs text-slate-300 mb-1">Neues Admin-Passwort</label>
-                  <input
-                    type="text"
-                    value={settingsForm.adminPassword}
-                    onChange={(e) =>
-                      setSettingsForm({ ...settingsForm, adminPassword: e.target.value })
-                    }
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
-                  />
-                </div>
+              <h4 className="font-bold text-white text-sm">Vereinsname</h4>
+              <div>
+                <label className="block text-xs text-slate-300 mb-1">Name des Vereins / Kellers</label>
+                <input
+                  type="text"
+                  value={settingsForm.clubName}
+                  onChange={(e) =>
+                    setSettingsForm({ ...settingsForm, clubName: e.target.value })
+                  }
+                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
+                />
               </div>
             </div>
 
             <button
               type="button"
               onClick={() => {
-                onUpdateSettings(settingsForm);
+                // Passwort & 2FA-E-Mail sind ausschließlich über den 2FA-Bereich änderbar
+                const safeSettings: AppSettings = {
+                  ...settingsForm,
+                  adminPassword: settings.adminPassword,
+                  adminEmail: settings.adminEmail,
+                };
+                onUpdateSettings(safeSettings);
                 showBanner('Einstellungen und Datenbank-Verbindung gespeichert!');
               }}
               className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-sm shadow-lg shadow-sky-500/20 cursor-pointer"
             >
               <Check className="w-4 h-4 stroke-[2.5]" />
-              <span>Alle Einstellungen speichern</span>
+              <span>Allgemeine Einstellungen speichern</span>
             </button>
+
+            {/* 2FA-Geschützter Bereich: Admin-Passwort & 2FA-E-Mail */}
+            <div className="pt-5 border-t border-slate-800 space-y-4">
+              <div className="flex items-center justify-between gap-2">
+                <h4 className="font-bold text-white text-sm flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                  <span>Admin-Passwort & 2FA-Schutz (Zwei-Faktor-Authentifizierung)</span>
+                </h4>
+                <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold">
+                  Geheim & geschützt
+                </span>
+              </div>
+
+              {twoFactorError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
+                  {twoFactorError}
+                </div>
+              )}
+
+              {!settings.adminEmail?.trim() ? (
+                /* Erstmalige Einrichtung der 2FA-E-Mail-Adresse */
+                <div className="p-4 rounded-xl bg-slate-950 border border-sky-500/30 space-y-3">
+                  <p className="text-xs text-slate-300 leading-relaxed">
+                    Hinterlege hier einmalig deine <strong>Admin-E-Mail-Adresse für die 2-Faktor-Authentifizierung (2FA)</strong>. Sobald sie gespeichert ist, können das Admin-Passwort und die 2FA-E-Mail-Adresse nur noch nach Bestätigung über diese E-Mail geändert werden.
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <div className="relative flex-1">
+                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="email"
+                        value={initial2FAEmailInput}
+                        onChange={(e) => setInitial2FAEmailInput(e.target.value)}
+                        placeholder="deine-admin-email@beispiel.de"
+                        className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleSaveInitial2FAEmail}
+                      className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer shrink-0"
+                    >
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>2FA-E-Mail aktivieren</span>
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Aktiver 2FA-Schutz */
+                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
+                      <span className="text-slate-400 block mb-0.5">Aktuelles Admin-Passwort:</span>
+                      <span className="font-bold text-white tracking-widest">••••••••••••</span>
+                      <span className="text-[11px] text-emerald-400 block mt-0.5">
+                        Verborgen & durch E-Mail-2FA geschützt
+                      </span>
+                    </div>
+                    <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
+                      <span className="text-slate-400 block mb-0.5">Hinterlegte 2FA-E-Mail-Adresse:</span>
+                      <span className="font-bold text-sky-300 break-all">{settings.adminEmail}</span>
+                      <span className="text-[11px] text-slate-400 block mt-0.5">
+                        Empfänger für 2FA-Bestätigungen
+                      </span>
+                    </div>
+                  </div>
+
+                  {twoFactorStage === 'idle' && (
+                    <button
+                      type="button"
+                      onClick={handleRequest2FACode}
+                      disabled={twoFactorLoading}
+                      className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-semibold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
+                    >
+                      <KeyRound className="w-4 h-4" />
+                      <span>
+                        {twoFactorLoading
+                          ? 'Sende 2FA-E-Mail...'
+                          : `Passwort oder 2FA-E-Mail ändern (2FA an ${settings.adminEmail} senden)`}
+                      </span>
+                    </button>
+                  )}
+
+                  {twoFactorStage === 'code_sent' && (
+                    <form onSubmit={handleVerify2FACode} className="space-y-3 pt-2 border-t border-slate-800">
+                      <p className="text-xs text-sky-200 leading-relaxed">
+                        Wir haben eine 2FA-E-Mail an <strong>{settings.adminEmail}</strong> gesendet. Gib hier den <strong>6-stelligen Code</strong> aus der E-Mail ein (oder klicke auf den Bestätigungs-Link in der E-Mail bzw. füge die Link-Adresse hier ein):
+                      </p>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="text"
+                          required
+                          value={twoFactorCodeInput}
+                          onChange={(e) => setTwoFactorCodeInput(e.target.value)}
+                          placeholder="6-stelliger Code oder Bestätigungs-Link..."
+                          className="flex-1 px-3.5 py-2 rounded-xl bg-slate-900 border border-sky-500 text-sm text-white font-semibold"
+                        />
+                        <button
+                          type="submit"
+                          disabled={twoFactorLoading || !twoFactorCodeInput.trim()}
+                          className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
+                        >
+                          {twoFactorLoading ? 'Prüfe...' : 'Code bestätigen'}
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <button
+                          type="button"
+                          onClick={handleRequest2FACode}
+                          disabled={twoFactorLoading}
+                          className="text-sky-400 hover:underline cursor-pointer"
+                        >
+                          E-Mail erneut senden
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTwoFactorStage('idle');
+                            setTwoFactorError(null);
+                          }}
+                          className="text-slate-400 hover:text-white cursor-pointer"
+                        >
+                          Abbrechen
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {twoFactorStage === 'verified' && (
+                    <form
+                      onSubmit={handleSave2FAProtectedChanges}
+                      className="space-y-3 pt-3 border-t border-emerald-500/30"
+                    >
+                      <div className="flex items-center gap-2 text-xs text-emerald-300 font-semibold">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span>
+                          2FA bestätigt! Du kannst jetzt das Admin-Passwort und/oder die 2FA-E-Mail-Adresse ändern:
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs text-slate-300 mb-1">
+                            Neues Admin-Passwort
+                          </label>
+                          <input
+                            type="password"
+                            value={twoFactorNewPassword}
+                            onChange={(e) => setTwoFactorNewPassword(e.target.value)}
+                            placeholder="Neues Passwort (leer = unverändert)"
+                            className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-emerald-500/50 text-sm text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-slate-300 mb-1">
+                            2FA-E-Mail-Adresse (änderbar)
+                          </label>
+                          <input
+                            type="email"
+                            required
+                            value={twoFactorNewEmail}
+                            onChange={(e) => setTwoFactorNewEmail(e.target.value)}
+                            placeholder="neue-email@beispiel.de"
+                            className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-emerald-500/50 text-sm text-white"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-1">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTwoFactorStage('idle');
+                            setTwoFactorNewPassword('');
+                            setTwoFactorError(null);
+                          }}
+                          className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 cursor-pointer"
+                        >
+                          Abbrechen
+                        </button>
+                        <button
+                          type="submit"
+                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-emerald-500/20 cursor-pointer"
+                        >
+                          <Check className="w-4 h-4 stroke-[2.5]" />
+                          <span>Passwort & 2FA-E-Mail speichern</span>
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* QR-Code für die Kellertür & Handy-Einladung */}

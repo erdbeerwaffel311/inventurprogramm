@@ -6,6 +6,7 @@ export const CONFIG_ROW_ID = '__keller_config__';
 export interface CloudConfigPayload {
   clubName: string;
   adminPassword: string;
+  adminEmail?: string;
   categories: CategoryInfo[];
   deletedCategoryIds?: string[];
   commonEvents: string[];
@@ -75,13 +76,103 @@ export function getSupabaseClient(settings: AppSettings): SupabaseClient | null 
 
   try {
     cachedClient = createClient(url, key, {
-      auth: { persistSession: false },
+      auth: { persistSession: true, detectSessionInUrl: true },
     });
     cachedKey = cacheToken;
     return cachedClient;
   } catch {
     return null;
   }
+}
+
+/**
+ * Sendet einen 2FA-Bestätigungscode / Magic-Link an die hinterlegte Admin-E-Mail-Adresse über Supabase Auth.
+ */
+export async function sendAdmin2FAEmail(
+  settings: AppSettings,
+  targetEmail: string
+): Promise<void> {
+  const client = getSupabaseClient(settings);
+  if (!client) {
+    throw new Error('Keine gültige Supabase-Datenbankverbindung konfiguriert.');
+  }
+  const cleanEmail = targetEmail.trim();
+  if (!cleanEmail || !cleanEmail.includes('@')) {
+    throw new Error('Bitte eine gültige E-Mail-Adresse eingeben.');
+  }
+
+  const redirectUrl = 'https://erdbeerwaffel311.github.io/inventurprogramm/?2fa=verify';
+  const { error } = await client.auth.signInWithOtp({
+    email: cleanEmail,
+    options: {
+      shouldCreateUser: true,
+      emailRedirectTo: redirectUrl,
+    },
+  });
+
+  if (error) {
+    throw new Error(error.message || 'Fehler beim Senden der 2FA-E-Mail.');
+  }
+}
+
+/**
+ * Prüft den eingegebenen 2FA-Code (6-8-stelliger Zahlencode) oder einen aus der E-Mail eingefügten Bestätigungs-Link.
+ */
+export async function verifyAdmin2FACode(
+  settings: AppSettings,
+  email: string,
+  tokenOrLink: string
+): Promise<boolean> {
+  const client = getSupabaseClient(settings);
+  if (!client) {
+    throw new Error('Keine gültige Supabase-Verbindung vorhanden.');
+  }
+
+  const cleanEmail = email.trim();
+  const rawInput = tokenOrLink.trim();
+  if (!rawInput) return false;
+
+  // Falls der Nutzer den kompletten Link aus der E-Mail kopiert und eingefügt hat:
+  if (rawInput.startsWith('http://') || rawInput.startsWith('https://')) {
+    try {
+      const parsedUrl = new URL(rawInput);
+      const tokenHash =
+        parsedUrl.searchParams.get('token_hash') || parsedUrl.searchParams.get('token');
+      const linkType = (parsedUrl.searchParams.get('type') || 'magiclink') as
+        | 'magiclink'
+        | 'signup'
+        | 'email';
+
+      if (tokenHash) {
+        const { data, error } = await client.auth.verifyOtp({
+          token_hash: tokenHash,
+          type: linkType,
+        });
+        if (!error && data?.session) {
+          return true;
+        }
+      }
+    } catch {
+      // Fallback auf normale Code-Prüfung
+    }
+  }
+
+  // Standard: 6- bis 8-stelligen OTP-Code prüfen
+  const cleanToken = rawInput.replace(/\s+/g, '');
+  const typesToTry: Array<'email' | 'magiclink' | 'signup'> = ['email', 'magiclink', 'signup'];
+
+  for (const otpType of typesToTry) {
+    const { data, error } = await client.auth.verifyOtp({
+      email: cleanEmail,
+      token: cleanToken,
+      type: otpType,
+    });
+    if (!error && (data?.session || data?.user)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export async function pullFromSupabase(settings: AppSettings): Promise<{
@@ -134,6 +225,7 @@ export async function pushConfigToSupabase(
   const configPayload: CloudConfigPayload = {
     clubName: settings.clubName,
     adminPassword: settings.adminPassword,
+    adminEmail: settings.adminEmail || '',
     categories: settings.categories,
     deletedCategoryIds,
     commonEvents: settings.commonEvents,
@@ -170,6 +262,7 @@ export async function pushToSupabase(
   const configPayload: CloudConfigPayload = {
     clubName: settings.clubName,
     adminPassword: settings.adminPassword,
+    adminEmail: settings.adminEmail || '',
     categories: settings.categories,
     commonEvents: settings.commonEvents,
     updatedAt: now,
@@ -246,3 +339,4 @@ export function buildShareableAppUrl(settings: AppSettings): string {
   const query = params.toString();
   return query ? `${baseUrl}?${query}` : baseUrl;
 }
+

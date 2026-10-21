@@ -94,6 +94,8 @@ export interface ParsedTextItem {
 export interface AppSettings {
   clubName: string;
   adminPassword: string;
+  /** E-Mail-Adresse für die 2-Faktor-Authentifizierung (2FA) zum Ändern des Admin-Passworts */
+  adminEmail?: string;
   supabaseUrl: string;
   supabaseAnonKey: string;
   aiProvider: 'gemini' | 'openai';
@@ -101,3 +103,4 @@ export interface AppSettings {
   commonEvents: string[];
   categories: CategoryInfo[];
 }
+

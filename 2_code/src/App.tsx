@@ -195,6 +195,10 @@ export const App: React.FC = () => {
               ...currentSettings,
               clubName: remote.config.clubName || currentSettings.clubName,
               adminPassword: remote.config.adminPassword || currentSettings.adminPassword,
+              adminEmail:
+                remote.config.adminEmail !== undefined
+                  ? remote.config.adminEmail
+                  : currentSettings.adminEmail,
               commonEvents: remote.config.commonEvents?.length
                 ? remote.config.commonEvents
                 : currentSettings.commonEvents,
@@ -272,21 +276,59 @@ export const App: React.FC = () => {
     relatedTransactionId?: string;
   }) {
     const now = new Date().toISOString();
+
+    // Berechne aktuell maximal rückgebbare (ausgeliehene/entnommene) Menge pro Artikel in Haupteinheit
+    const openBorrowedByItem: Record<string, number> = {};
+    for (const tx of transactions) {
+      if (tx.type !== 'withdraw' || tx.status === 'completed') continue;
+      if (params.relatedTransactionId && tx.id !== params.relatedTransactionId) continue;
+      for (const line of tx.items) {
+        const rem = Math.max(
+          0,
+          roundStock(Math.abs(line.quantityChange) - (line.returnedQuantity || 0))
+        );
+        if (rem > 0) {
+          openBorrowedByItem[line.itemId] = roundStock(
+            (openBorrowedByItem[line.itemId] || 0) + rem
+          );
+        }
+      }
+    }
+
     const lineItems: TransactionLineItem[] = [];
     const nextItems = items.map((item) => {
       const entry = params.entries.find((e) => e.itemId === item.id);
       if (!entry || entry.amount <= 0) return item;
 
-      const deltaPrimary = toPrimaryUnitQuantity(item, entry.amount, entry.unit);
+      let deltaPrimary = toPrimaryUnitQuantity(item, entry.amount, entry.unit);
+
+      // Bei Rückgaben niemals mehr einbuchen als tatsächlich ausgeliehen/entnommen wurde
+      if (params.mode === 'return') {
+        const maxReturnPrimary = openBorrowedByItem[item.id] || 0;
+        deltaPrimary = Math.min(deltaPrimary, maxReturnPrimary);
+        if (deltaPrimary <= 0) return item;
+      }
+
       const signedChange = params.mode === 'withdraw' ? -deltaPrimary : deltaPrimary;
       const previousStock = item.quantity;
       const newStock = roundStock(Math.max(0, previousStock + signedChange));
+
+      const effectiveEnteredAmount =
+        params.mode === 'return' &&
+        item.subUnit &&
+        item.subUnitsPerUnit &&
+        item.subUnitsPerUnit > 1 &&
+        entry.unit.toLowerCase() === item.subUnit.toLowerCase()
+          ? roundStock(deltaPrimary * item.subUnitsPerUnit)
+          : params.mode === 'return'
+          ? deltaPrimary
+          : entry.amount;
 
       lineItems.push({
         itemId: item.id,
         itemName: item.name,
         quantityChange: signedChange,
-        enteredAmount: entry.amount,
+        enteredAmount: effectiveEnteredAmount,
         enteredUnit: entry.unit,
         previousStock,
         newStock,
@@ -313,9 +355,18 @@ export const App: React.FC = () => {
       synced: false,
     };
 
-    const nextTransactions = [
-      ...(lineItems.length > 0 ? [newTx] : []),
-      ...transactions.map((tx) => {
+    // Bei allgemeiner Rückgabe (ohne spezifische Event-Auswahl) die zurückgegebene Menge
+    // auf die offenen Entnahmen anrechnen (älteste zuerst)
+    const remainingCreditByItem: Record<string, number> = {};
+    if (params.mode === 'return' && !params.relatedTransactionId) {
+      for (const li of lineItems) {
+        remainingCreditByItem[li.itemId] = Math.abs(li.quantityChange);
+      }
+    }
+
+    const updatedExistingTxs = [...transactions]
+      .reverse()
+      .map((tx) => {
         if (params.relatedTransactionId && tx.id === params.relatedTransactionId) {
           const updatedLines = tx.items.map((line) => {
             const retEntry = lineItems.find((l) => l.itemId === line.itemId);
@@ -323,7 +374,10 @@ export const App: React.FC = () => {
             return {
               ...line,
               returnedQuantity: roundStock(
-                (line.returnedQuantity || 0) + Math.abs(retEntry.quantityChange)
+                Math.min(
+                  Math.abs(line.quantityChange),
+                  (line.returnedQuantity || 0) + Math.abs(retEntry.quantityChange)
+                )
               ),
             };
           });
@@ -334,8 +388,53 @@ export const App: React.FC = () => {
             synced: false,
           };
         }
+
+        if (
+          params.mode === 'return' &&
+          !params.relatedTransactionId &&
+          tx.type === 'withdraw' &&
+          tx.status !== 'completed'
+        ) {
+          let touched = false;
+          const updatedLines = tx.items.map((line) => {
+            const toCredit = remainingCreditByItem[line.itemId] || 0;
+            if (toCredit <= 0) return line;
+            const taken = Math.abs(line.quantityChange);
+            const alreadyRet = line.returnedQuantity || 0;
+            const openQty = Math.max(0, roundStock(taken - alreadyRet));
+            if (openQty <= 0) return line;
+
+            const applied = roundStock(Math.min(openQty, toCredit));
+            remainingCreditByItem[line.itemId] = roundStock(toCredit - applied);
+            touched = true;
+            return {
+              ...line,
+              returnedQuantity: roundStock(alreadyRet + applied),
+            };
+          });
+
+          if (touched) {
+            const allReturned = updatedLines.every(
+              (l) => (l.returnedQuantity || 0) >= Math.abs(l.quantityChange) - 0.0001
+            );
+            return {
+              ...tx,
+              items: updatedLines,
+              status: (allReturned ? 'completed' : 'partially_returned') as
+                | 'completed'
+                | 'partially_returned',
+              synced: false,
+            };
+          }
+        }
+
         return tx;
-      }),
+      })
+      .reverse();
+
+    const nextTransactions = [
+      ...(lineItems.length > 0 ? [newTx] : []),
+      ...updatedExistingTxs,
     ];
 
     setItems(nextItems);

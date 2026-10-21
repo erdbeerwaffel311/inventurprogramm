@@ -3,6 +3,9 @@
   "appName": "Vereinskeller",
   "webDir": "dist",
   "server": {
+    "url": "https://erdbeerwaffel311.github.io/inventurprogramm/",
+    "cleartext": false,
     "androidScheme": "https"
   }
 }
+
