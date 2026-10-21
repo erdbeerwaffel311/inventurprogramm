@@ -126,6 +126,21 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
     return roundStock(maxPrimary);
   }
 
+  function getMaxAllowedForModeInUnit(
+    item: InventoryItem,
+    targetMode: BookingMode,
+    unit: string
+  ): number {
+    if (targetMode === 'withdraw') {
+      return getMaxReturnInUnit(item, Math.max(0, item.quantity), unit);
+    }
+    if (targetMode === 'return') {
+      const openPrimary = openWithdrawnByItem[item.id] || 0;
+      return getMaxReturnInUnit(item, openPrimary, unit);
+    }
+    return Infinity;
+  }
+
   function showWarningBanner(msg: string) {
     setWarningBanner(msg);
     setTimeout(() => {
@@ -133,16 +148,15 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
     }, 5500);
   }
 
-  // Wenn in den Modus "return" gewechselt wird, Warenkorb automatisch auf maximal ausgeliehene Mengen begrenzen
+  // Wenn in den Modus "withdraw" oder "return" gewechselt wird, Warenkorb automatisch auf Lagerbestand bzw. ausgeliehene Menge begrenzen
   useEffect(() => {
-    if (mode !== 'return') return;
+    if (mode === 'restock') return;
     setCart((prev) => {
       const next: Record<string, CartEntry> = {};
       for (const [id, entry] of Object.entries(prev)) {
         const item = items.find((i) => i.id === id);
         if (!item) continue;
-        const openPrimary = openWithdrawnByItem[id] || 0;
-        const maxInUnit = getMaxReturnInUnit(item, openPrimary, entry.unit);
+        const maxInUnit = getMaxAllowedForModeInUnit(item, mode, entry.unit);
         const clamped = roundStock(Math.min(entry.amount, maxInUnit));
         if (clamped > 0) {
           next[id] = { ...entry, amount: clamped };
@@ -248,9 +262,8 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
           ? roundStock(existing.amount + p.amount)
           : roundStock(p.amount);
 
-      if (mode === 'return') {
-        const openPrimary = openWithdrawnByItem[itemId] || 0;
-        const maxInUnit = getMaxReturnInUnit(p.matchedItem, openPrimary, p.unit);
+      if (mode === 'withdraw' || mode === 'return') {
+        const maxInUnit = getMaxAllowedForModeInUnit(p.matchedItem, mode, p.unit);
         if (desiredAmount > maxInUnit) {
           desiredAmount = maxInUnit;
           cappedWarning = true;
@@ -274,7 +287,9 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
     setInputMethod('list');
     if (cappedWarning) {
       showWarningBanner(
-        'Hinweis: Rückgabemengen wurden auf die maximal ausgeliehene Menge begrenzt. Extra Inventar kann über „Befüllen / Einkauf“ hinzugefügt werden.'
+        mode === 'withdraw'
+          ? 'Hinweis: Entnahmemengen wurden auf den aktuell verfügbaren Lagerbestand begrenzt.'
+          : 'Hinweis: Rückgabemengen wurden auf die maximal ausgeliehene Menge begrenzt. Extra Inventar kann über „Befüllen / Einkauf“ hinzugefügt werden.'
       );
     }
     if (count > 0) {
@@ -300,10 +315,9 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
         const currentEntry = prev[item.id];
         if (!currentEntry) return prev;
         let nextAmt = currentEntry.amount;
-        if (mode === 'return') {
-          const openPrimary = openWithdrawnByItem[item.id] || 0;
-          const maxInUnit = getMaxReturnInUnit(item, openPrimary, newUnit);
-          nextAmt = Math.min(nextAmt, maxInUnit);
+        if (mode === 'withdraw' || mode === 'return') {
+          const maxInUnit = getMaxAllowedForModeInUnit(item, mode, newUnit);
+          nextAmt = roundStock(Math.min(nextAmt, maxInUnit));
         }
         if (nextAmt <= 0) {
           const copy = { ...prev };
@@ -327,19 +341,22 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
     const current = cart[item.id]?.amount || 0;
     let nextAmount = roundStock(Math.max(0, current + delta));
 
-    if (mode === 'return' && delta > 0) {
-      const openPrimary = openWithdrawnByItem[item.id] || 0;
-      const maxInUnit = getMaxReturnInUnit(item, openPrimary, unit);
+    if (delta > 0 && (mode === 'withdraw' || mode === 'return')) {
+      const maxInUnit = getMaxAllowedForModeInUnit(item, mode, unit);
       if (maxInUnit <= 0) {
         showWarningBanner(
-          `Von „${item.name}“ ist aktuell nichts ausgeliehen. Extra Inventar kann über das „Befüllen / Einkauf“-Menü hinzugefügt werden.`
+          mode === 'withdraw'
+            ? `Von „${item.name}“ ist aktuell nichts auf Lager (Bestand: 0).`
+            : `Von „${item.name}“ ist aktuell nichts ausgeliehen. Extra Inventar kann über das „Befüllen / Einkauf“-Menü hinzugefügt werden.`
         );
         return;
       }
       if (nextAmount > maxInUnit) {
         nextAmount = maxInUnit;
         showWarningBanner(
-          `Maximal ${formatEnteredAmount(maxInUnit, unit)} von „${item.name}“ zurückgebbar (aktuell ausgeliehen). Extra Inventar bitte über „Befüllen / Einkauf“ hinzufügen.`
+          mode === 'withdraw'
+            ? `Maximal ${formatEnteredAmount(maxInUnit, unit)} von „${item.name}“ im Lagerbestand verfügbar.`
+            : `Maximal ${formatEnteredAmount(maxInUnit, unit)} von „${item.name}“ zurückgebbar (aktuell ausgeliehen). Extra Inventar bitte über „Befüllen / Einkauf“ hinzufügen.`
         );
       }
     }
@@ -372,12 +389,13 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
     }
 
     let finalAmount = roundStock(parsed);
-    if (mode === 'return') {
-      const openPrimary = openWithdrawnByItem[item.id] || 0;
-      const maxInUnit = getMaxReturnInUnit(item, openPrimary, unit);
+    if (mode === 'withdraw' || mode === 'return') {
+      const maxInUnit = getMaxAllowedForModeInUnit(item, mode, unit);
       if (maxInUnit <= 0) {
         showWarningBanner(
-          `Von „${item.name}“ ist aktuell nichts ausgeliehen. Extra Inventar kann über das „Befüllen / Einkauf“-Menü hinzugefügt werden.`
+          mode === 'withdraw'
+            ? `Von „${item.name}“ ist aktuell nichts auf Lager (Bestand: 0).`
+            : `Von „${item.name}“ ist aktuell nichts ausgeliehen. Extra Inventar kann über das „Befüllen / Einkauf“-Menü hinzugefügt werden.`
         );
         setCart((prev) => {
           const copy = { ...prev };
@@ -389,7 +407,9 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
       if (finalAmount > maxInUnit) {
         finalAmount = maxInUnit;
         showWarningBanner(
-          `Maximal ${formatEnteredAmount(maxInUnit, unit)} von „${item.name}“ zurückgebbar (aktuell ausgeliehen). Extra Inventar bitte über „Befüllen / Einkauf“ hinzufügen.`
+          mode === 'withdraw'
+            ? `Maximal ${formatEnteredAmount(maxInUnit, unit)} von „${item.name}“ im Lagerbestand verfügbar.`
+            : `Maximal ${formatEnteredAmount(maxInUnit, unit)} von „${item.name}“ zurückgebbar (aktuell ausgeliehen). Extra Inventar bitte über „Befüllen / Einkauf“ hinzufügen.`
         );
       }
     }
@@ -1008,11 +1028,21 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
                       <div className="flex items-center gap-2 self-end sm:self-center">
                         <input
                           type="number"
-                          min="0.1"
+                          min="0"
+                          max={
+                            mode === 'withdraw' || mode === 'return'
+                              ? getMaxAllowedForModeInUnit(entry.matchedItem, mode, entry.unit)
+                              : undefined
+                          }
                           step="0.5"
                           value={entry.amount}
                           onChange={(e) => {
-                            const val = Math.max(0, parseFloat(e.target.value) || 0);
+                            const rawVal = Math.max(0, parseFloat(e.target.value) || 0);
+                            const maxAllowed =
+                              mode === 'withdraw' || mode === 'return'
+                                ? getMaxAllowedForModeInUnit(entry.matchedItem!, mode, entry.unit)
+                                : Infinity;
+                            const val = roundStock(Math.min(rawVal, maxAllowed));
                             setParsedPreview((prev) =>
                               prev.map((p, i) =>
                                 i === idx
@@ -1154,7 +1184,9 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
                 item.subUnit && selectedUnit.toLowerCase() === item.subUnit.toLowerCase();
               const openPrimary = openWithdrawnByItem[item.id] || 0;
               const maxReturnInUnit = getMaxReturnInUnit(item, openPrimary, selectedUnit);
-              const isReturnMaxReached = mode === 'return' && inCartAmount >= maxReturnInUnit;
+              const maxAllowedInUnit = getMaxAllowedForModeInUnit(item, mode, selectedUnit);
+              const isMaxReached =
+                (mode === 'withdraw' || mode === 'return') && inCartAmount >= maxAllowedInUnit;
 
               return (
                 <div
@@ -1284,7 +1316,7 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
                         inputMode="decimal"
                         value={inCartAmount > 0 ? formatGermanNumber(inCartAmount) : ''}
                         placeholder="0"
-                        disabled={mode === 'return' && maxReturnInUnit <= 0}
+                        disabled={(mode === 'withdraw' || mode === 'return') && maxAllowedInUnit <= 0}
                         onChange={(e) => setExactCartAmount(item, e.target.value)}
                         className={`w-14 h-9 text-center rounded-xl border font-bold text-sm focus:outline-none disabled:opacity-40 ${
                           inCartAmount > 0
@@ -1298,7 +1330,7 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
                         <button
                           type="button"
                           onClick={() => adjustCartAmount(item, 0.5)}
-                          disabled={isReturnMaxReached}
+                          disabled={isMaxReached}
                           className="h-9 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-sky-300 font-semibold text-xs transition cursor-pointer"
                           title="Halbe Einheit hinzufügen (+0,5)"
                         >
@@ -1309,7 +1341,7 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
                       <button
                         type="button"
                         onClick={() => adjustCartAmount(item, 1)}
-                        disabled={isReturnMaxReached}
+                        disabled={isMaxReached}
                         className="w-9 h-9 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-30 text-slate-950 flex items-center justify-center font-bold shadow-sm transition cursor-pointer"
                         title="+1"
                       >
@@ -1320,7 +1352,7 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
                         <button
                           type="button"
                           onClick={() => adjustCartAmount(item, 5)}
-                          disabled={isReturnMaxReached}
+                          disabled={isMaxReached}
                           className="h-9 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-30 text-sky-300 font-semibold text-xs transition cursor-pointer"
                           title="+5"
                         >

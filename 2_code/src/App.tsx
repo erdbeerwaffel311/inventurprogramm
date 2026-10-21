@@ -302,6 +302,13 @@ export const App: React.FC = () => {
 
       let deltaPrimary = toPrimaryUnitQuantity(item, entry.amount, entry.unit);
 
+      // Bei Entnahmen niemals mehr ausbuchen als aktuell im Lagerbestand vorhanden ist
+      if (params.mode === 'withdraw') {
+        const availablePrimary = Math.max(0, roundStock(item.quantity));
+        deltaPrimary = Math.min(deltaPrimary, availablePrimary);
+        if (deltaPrimary <= 0) return item;
+      }
+
       // Bei Rückgaben niemals mehr einbuchen als tatsächlich ausgeliehen/entnommen wurde
       if (params.mode === 'return') {
         const maxReturnPrimary = openBorrowedByItem[item.id] || 0;
@@ -314,13 +321,13 @@ export const App: React.FC = () => {
       const newStock = roundStock(Math.max(0, previousStock + signedChange));
 
       const effectiveEnteredAmount =
-        params.mode === 'return' &&
+        (params.mode === 'withdraw' || params.mode === 'return') &&
         item.subUnit &&
         item.subUnitsPerUnit &&
         item.subUnitsPerUnit > 1 &&
         entry.unit.toLowerCase() === item.subUnit.toLowerCase()
           ? roundStock(deltaPrimary * item.subUnitsPerUnit)
-          : params.mode === 'return'
+          : params.mode === 'withdraw' || params.mode === 'return'
           ? deltaPrimary
           : entry.amount;
 
