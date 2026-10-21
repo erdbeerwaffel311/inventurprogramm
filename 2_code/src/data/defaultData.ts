@@ -25,10 +25,42 @@ export const CATEGORIES: CategoryInfo[] = [
   },
 ];
 
+export const DEFAULT_ALLOWED_MEMBERS: string[] = [
+  'Simon Märker',
+  'Aaron Hammerer',
+  'Amina Amann',
+  'Angelina Fitsch',
+  'Anton Loss',
+  'Celil-Kaan Beler',
+  'Chiara Forcher',
+  'Elias Mantler',
+  'Emil Schmalfuss',
+  'Fabian Stauss',
+  'Hannah Grabher',
+  'Ian Hörburger',
+  'Ismail Öztoprak',
+  'Josefine Müller',
+  'Jeramis Dengel',
+  'Juliana Moosbrugger',
+  'Kaspar Riedmann',
+  'Katharina Nigg',
+  'Leon Schwendinger',
+  'Elisabeth Himmer',
+  'Liljana Walser',
+  'Marian Kolanovic',
+  'Paulus Cukrowicz',
+  'Rania Moosbrugger',
+  'Nick Klein',
+  'Sophia-Maria Thoma',
+  'Emma Holzer',
+  'Elias Mathis',
+];
+
 export const DEFAULT_SETTINGS: AppSettings = {
   clubName: 'Vereinskeller',
   adminPassword: 'admin',
   adminEmail: '',
+  allowedMembers: DEFAULT_ALLOWED_MEMBERS,
   supabaseUrl: import.meta.env.VITE_SUPABASE_URL || 'https://zdduvvluqairhnbdbunk.supabase.co',
   supabaseAnonKey:
     import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_CEjKQudAlYxYtTvykEwDxw_E4KvyUhC',

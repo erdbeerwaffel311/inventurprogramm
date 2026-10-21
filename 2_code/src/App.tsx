@@ -9,6 +9,7 @@ import {
   TransactionLineItem,
 } from './types';
 import {
+  DEFAULT_ALLOWED_MEMBERS,
   DEFAULT_ITEMS,
   DEFAULT_SETTINGS,
   DEFAULT_TRANSACTIONS,
@@ -18,6 +19,7 @@ import {
 import { roundStock, toPrimaryUnitQuantity } from './utils/units';
 import {
   deleteItemFromSupabase,
+  getSupabaseClient,
   normalizeSupabaseUrl,
   pullFromSupabase,
   pushConfigToSupabase,
@@ -38,6 +40,7 @@ const STORAGE_KEYS = {
 export const App: React.FC = () => {
   const [activeTab, setActiveTab] = useState<ActiveTab>('booking');
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
+  const [initial2FAVerified, setInitial2FAVerified] = useState(false);
   const [selectedReturnTxId, setSelectedReturnTxId] = useState<string | null>(null);
 
   const [settings, setSettings] = useState<AppSettings>(() => {
@@ -47,6 +50,9 @@ export const App: React.FC = () => {
 
       if (!parsed.supabaseUrl) parsed.supabaseUrl = DEFAULT_SETTINGS.supabaseUrl;
       if (!parsed.supabaseAnonKey) parsed.supabaseAnonKey = DEFAULT_SETTINGS.supabaseAnonKey;
+      if (!Array.isArray(parsed.allowedMembers) || parsed.allowedMembers.length === 0) {
+        parsed.allowedMembers = DEFAULT_ALLOWED_MEMBERS;
+      }
 
       // Prüfe QR-Code / Einladungslink-Parameter (?dbUrl=...&dbKey=...&club=...)
       const params = new URLSearchParams(window.location.search);
@@ -75,6 +81,35 @@ export const App: React.FC = () => {
       return DEFAULT_SETTINGS;
     }
   });
+
+  // Automatische Erkennung beim Öffnen über den 2FA-Bestätigungslink aus der E-Mail
+  useEffect(() => {
+    const has2FAParam =
+      new URLSearchParams(window.location.search).get('2fa') === 'verify' ||
+      window.location.hash.includes('access_token=');
+    if (!has2FAParam) return;
+
+    const client = getSupabaseClient(settings);
+    if (!client) return;
+
+    const { data: sub } = client.auth.onAuthStateChange((event, session) => {
+      if (
+        (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') &&
+        session?.user?.email &&
+        (!settings.adminEmail ||
+          session.user.email.toLowerCase() === settings.adminEmail.trim().toLowerCase())
+      ) {
+        setInitial2FAVerified(true);
+        setIsAdminUnlocked(true);
+        setActiveTab('admin');
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+    });
+
+    return () => {
+      sub.subscription.unsubscribe();
+    };
+  }, [settings]);
 
   const [items, setItems] = useState<InventoryItem[]>(() => {
     try {
@@ -199,6 +234,9 @@ export const App: React.FC = () => {
                 remote.config.adminEmail !== undefined
                   ? remote.config.adminEmail
                   : currentSettings.adminEmail,
+              allowedMembers: remote.config.allowedMembers?.length
+                ? remote.config.allowedMembers
+                : currentSettings.allowedMembers || DEFAULT_ALLOWED_MEMBERS,
               commonEvents: remote.config.commonEvents?.length
                 ? remote.config.commonEvents
                 : currentSettings.commonEvents,
@@ -647,6 +685,8 @@ export const App: React.FC = () => {
             isUnlocked={isAdminUnlocked}
             onUnlock={() => setIsAdminUnlocked(true)}
             onLock={() => setIsAdminUnlocked(false)}
+            initial2FAVerified={initial2FAVerified}
+            onClearInitial2FAVerified={() => setInitial2FAVerified(false)}
             onSaveInitialInventory={handleSaveInitialInventory}
             onUpsertItem={handleUpsertItem}
             onDeleteItem={handleDeleteItem}

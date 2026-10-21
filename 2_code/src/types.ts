@@ -96,6 +96,8 @@ export interface AppSettings {
   adminPassword: string;
   /** E-Mail-Adresse für die 2-Faktor-Authentifizierung (2FA) zum Ändern des Admin-Passworts */
   adminEmail?: string;
+  /** Liste der erlaubten Namen für Buchungen / Entnahmen (im Admin-Menü anpassbar) */
+  allowedMembers: string[];
   supabaseUrl: string;
   supabaseAnonKey: string;
   aiProvider: 'gemini' | 'openai';
@@ -103,4 +105,5 @@ export interface AppSettings {
   commonEvents: string[];
   categories: CategoryInfo[];
 }
+
 

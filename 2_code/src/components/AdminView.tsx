@@ -24,6 +24,8 @@ import {
   Mail,
   ShieldCheck,
   KeyRound,
+  Users,
+  UserPlus,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
@@ -33,7 +35,7 @@ import {
   InventoryItem,
   InventoryTransaction,
 } from '../types';
-import { CATEGORIES } from '../data/defaultData';
+import { CATEGORIES, DEFAULT_ALLOWED_MEMBERS } from '../data/defaultData';
 import {
   formatGermanNumber,
   formatStockDisplay,
@@ -62,6 +64,8 @@ interface AdminViewProps {
   isUnlocked: boolean;
   onUnlock: () => void;
   onLock: () => void;
+  initial2FAVerified?: boolean;
+  onClearInitial2FAVerified?: () => void;
   onSaveInitialInventory: (updatedQuantities: Record<string, number>, note?: string) => void;
   onUpsertItem: (item: InventoryItem) => void;
   onDeleteItem: (itemId: string) => void;
@@ -82,6 +86,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
   isUnlocked,
   onUnlock,
   onLock,
+  initial2FAVerified,
+  onClearInitial2FAVerified,
   onSaveInitialInventory,
   onUpsertItem,
   onDeleteItem,
@@ -91,6 +97,10 @@ export const AdminView: React.FC<AdminViewProps> = ({
   isSyncing,
 }) => {
   const activeCategories = settings.categories?.length ? settings.categories : CATEGORIES;
+  const activeAllowedMembers =
+    Array.isArray(settings.allowedMembers) && settings.allowedMembers.length > 0
+      ? settings.allowedMembers
+      : DEFAULT_ALLOWED_MEMBERS;
 
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
@@ -98,6 +108,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     'inventory' | 'items' | 'csv' | 'settings'
   >('inventory');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [newMemberName, setNewMemberName] = useState('');
 
   // State für Erstinventur (itemId -> { main: string, sub: string })
   const [counts, setCounts] = useState<Record<string, { main: string; sub: string }>>(() =>
@@ -162,6 +173,62 @@ export const AdminView: React.FC<AdminViewProps> = ({
       setTwoFactorNewEmail(settings.adminEmail);
     }
   }, [settings]);
+
+  useEffect(() => {
+    if (initial2FAVerified) {
+      setTwoFactorStage('verified');
+      setTwoFactorNewEmail(settings.adminEmail || '');
+      setAdminSubTab('settings');
+      onClearInitial2FAVerified?.();
+    }
+  }, [initial2FAVerified, settings.adminEmail]);
+
+  function handleAddAllowedMember(e: React.FormEvent) {
+    e.preventDefault();
+    const rawEntries = newMemberName
+      .split(/[\n,;]+/)
+      .map((s) => s.trim().replace(/\s+/g, ' '))
+      .filter(Boolean);
+    if (rawEntries.length === 0) return;
+
+    const nextList = [...activeAllowedMembers];
+    let addedCount = 0;
+    for (const candidate of rawEntries) {
+      const exists = nextList.some(
+        (m) => m.trim().toLowerCase() === candidate.toLowerCase()
+      );
+      if (!exists) {
+        nextList.push(candidate);
+        addedCount++;
+      }
+    }
+
+    if (addedCount > 0) {
+      const nextSettings: AppSettings = {
+        ...settings,
+        allowedMembers: nextList,
+      };
+      setSettingsForm(nextSettings);
+      onUpdateSettings(nextSettings);
+      showBanner(
+        addedCount === 1
+          ? `Person „${rawEntries[0]}“ wurde zur Namensliste hinzugefügt.`
+          : `${addedCount} Personen wurden zur Namensliste hinzugefügt.`
+      );
+    }
+    setNewMemberName('');
+  }
+
+  function handleRemoveAllowedMember(memberToRemove: string) {
+    const nextList = activeAllowedMembers.filter((m) => m !== memberToRemove);
+    const nextSettings: AppSettings = {
+      ...settings,
+      allowedMembers: nextList,
+    };
+    setSettingsForm(nextSettings);
+    onUpdateSettings(nextSettings);
+    showBanner(`Person „${memberToRemove}“ wurde aus der Namensliste entfernt.`);
+  }
 
   // Automatische Erkennung, falls der Nutzer auf den 2FA-Bestätigungslink in der E-Mail geklickt hat
   useEffect(() => {
@@ -669,7 +736,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
             }`}
           >
             <Settings className="w-4 h-4" />
-            <span>4. Datenbank, QR-Code & Passwort</span>
+            <span>4. Personen, Datenbank & Passwort</span>
           </button>
         </div>
 
@@ -1285,277 +1352,355 @@ export const AdminView: React.FC<AdminViewProps> = ({
         </div>
       )}
 
-      {/* SUB-TAB 4: DATENBANK, QR-CODE & EINSTELLUNGEN */}
+      {/* SUB-TAB 4: PERSONEN, DATENBANK, QR-CODE & EINSTELLUNGEN */}
       {adminSubTab === 'settings' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 no-print">
-          <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5">
-            <div>
-              <h3 className="font-bold text-white text-base flex items-center gap-2">
-                <Database className="w-5 h-5 text-sky-400" />
-                <span>Kostenlose Cloud-Datenbank (Supabase) für Multi-Geräte-Sync</span>
-              </h3>
-              <p className="text-xs text-slate-400 mt-1">
-                Damit alle Vereinsmitglieder von ihren eigenen Handys auf denselben Kellerbestand zugreifen können, kannst du hier ein kostenloses Supabase-Projekt (supabase.com) hinterlegen.
-              </p>
-            </div>
-
-            <div className="space-y-3">
+        <div className="space-y-5 no-print">
+          {/* Berechtigte Personen / Namensliste verwalten */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <label className="block text-xs text-slate-300 mb-1">
-                  Supabase Project URL (z. B. https://xyz.supabase.co)
-                </label>
-                <input
-                  type="url"
-                  value={settingsForm.supabaseUrl}
-                  onChange={(e) =>
-                    setSettingsForm({ ...settingsForm, supabaseUrl: e.target.value })
-                  }
-                  placeholder="https://dein-projekt.supabase.co"
-                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">
-                  Supabase Anon / Public Key
-                </label>
-                <input
-                  type="password"
-                  value={settingsForm.supabaseAnonKey}
-                  onChange={(e) =>
-                    setSettingsForm({ ...settingsForm, supabaseAnonKey: e.target.value })
-                  }
-                  placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
-                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
-                />
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    navigator.clipboard.writeText(SUPABASE_SETUP_SQL);
-                    setCopiedSql(true);
-                    setTimeout(() => setCopiedSql(false), 3000);
-                  }}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-sky-300 border border-slate-700 cursor-pointer"
-                >
-                  {copiedSql ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                <h3 className="font-bold text-white text-base flex items-center gap-2">
+                  <Users className="w-5 h-5 text-sky-400" />
                   <span>
-                    {copiedSql
-                      ? 'SQL-Skript kopiert!'
-                      : 'SQL-Skript für Tabellen-Einrichtung kopieren'}
+                    Berechtigte Personen / Namensliste verwalten ({activeAllowedMembers.length})
                   </span>
-                </button>
-
-                {settings.supabaseUrl && settings.supabaseAnonKey && (
-                  <button
-                    type="button"
-                    onClick={onManualSync}
-                    disabled={isSyncing}
-                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-xs font-semibold text-emerald-300 border border-emerald-500/40 cursor-pointer"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                    <span>Jetzt mit Cloud synchronisieren</span>
-                  </button>
-                )}
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Bei der Namenseingabe im Buchungs-Menü werden ausschließlich Namen aus dieser Liste akzeptiert. Änderungen werden automatisch mit der Cloud synchronisiert.
+                </p>
               </div>
             </div>
 
-            {/* Optionale KI-Erkennung */}
-            <div className="pt-4 border-t border-slate-800 space-y-3">
-              <h4 className="font-bold text-white text-sm flex items-center gap-2">
-                <Sparkles className="w-4 h-4 text-amber-400" />
-                <span>Optionale KI-Unterstützung für Freitext-Erkennung</span>
-              </h4>
-              <p className="text-xs text-slate-400">
-                Die lokale Texterkennung funktioniert bereits komplett kostenlos und offline. Optional kannst du zusätzlich einen Gemini- oder OpenAI-API-Key hinterlegen.
-              </p>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                <select
-                  value={settingsForm.aiProvider}
-                  onChange={(e) =>
-                    setSettingsForm({
-                      ...settingsForm,
-                      aiProvider: e.target.value as 'gemini' | 'openai',
-                    })
-                  }
-                  className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
-                >
-                  <option value="gemini">Google Gemini API</option>
-                  <option value="openai">OpenAI API</option>
-                </select>
-                <input
-                  type="password"
-                  value={settingsForm.aiApiKey}
-                  onChange={(e) =>
-                    setSettingsForm({ ...settingsForm, aiApiKey: e.target.value })
-                  }
-                  placeholder="Optionaler API-Key..."
-                  className="sm:col-span-2 px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
-                />
-              </div>
-            </div>
-
-            {/* Vereinsname */}
-            <div className="pt-4 border-t border-slate-800 space-y-3">
-              <h4 className="font-bold text-white text-sm">Vereinsname</h4>
-              <div>
-                <label className="block text-xs text-slate-300 mb-1">Name des Vereins / Kellers</label>
+            <form onSubmit={handleAddAllowedMember} className="flex flex-col sm:flex-row gap-2">
+              <div className="relative flex-1">
+                <UserPlus className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  value={settingsForm.clubName}
-                  onChange={(e) =>
-                    setSettingsForm({ ...settingsForm, clubName: e.target.value })
-                  }
-                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
+                  value={newMemberName}
+                  onChange={(e) => setNewMemberName(e.target.value)}
+                  placeholder="Neuen Namen hinzufügen (z. B. Max Mustermann)..."
+                  className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white focus:border-sky-500 focus:outline-none"
                 />
               </div>
+              <button
+                type="submit"
+                disabled={!newMemberName.trim()}
+                className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-40 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer shrink-0"
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+                <span>Name hinzufügen</span>
+              </button>
+            </form>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1 pt-1">
+              {activeAllowedMembers.map((member) => (
+                <div
+                  key={member}
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-slate-200"
+                >
+                  <span className="font-medium truncate">{member}</span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        window.confirm(
+                          `Soll „${member}“ wirklich von der Liste der berechtigten Personen entfernt werden?`
+                        )
+                      ) {
+                        handleRemoveAllowedMember(member);
+                      }
+                    }}
+                    className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/15 transition cursor-pointer shrink-0"
+                    title={`${member} entfernen`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
             </div>
+          </div>
 
-            <button
-              type="button"
-              onClick={() => {
-                // Passwort & 2FA-E-Mail sind ausschließlich über den 2FA-Bereich änderbar
-                const safeSettings: AppSettings = {
-                  ...settingsForm,
-                  adminPassword: settings.adminPassword,
-                  adminEmail: settings.adminEmail,
-                };
-                onUpdateSettings(safeSettings);
-                showBanner('Einstellungen und Datenbank-Verbindung gespeichert!');
-              }}
-              className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-sm shadow-lg shadow-sky-500/20 cursor-pointer"
-            >
-              <Check className="w-4 h-4 stroke-[2.5]" />
-              <span>Allgemeine Einstellungen speichern</span>
-            </button>
-
-            {/* 2FA-Geschützter Bereich: Admin-Passwort & 2FA-E-Mail */}
-            <div className="pt-5 border-t border-slate-800 space-y-4">
-              <div className="flex items-center justify-between gap-2">
-                <h4 className="font-bold text-white text-sm flex items-center gap-2">
-                  <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                  <span>Admin-Passwort & 2FA-Schutz (Zwei-Faktor-Authentifizierung)</span>
-                </h4>
-                <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold">
-                  Geheim & geschützt
-                </span>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            <div className="lg:col-span-7 bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-5">
+              <div>
+                <h3 className="font-bold text-white text-base flex items-center gap-2">
+                  <Database className="w-5 h-5 text-sky-400" />
+                  <span>Kostenlose Cloud-Datenbank (Supabase) für Multi-Geräte-Sync</span>
+                </h3>
+                <p className="text-xs text-slate-400 mt-1">
+                  Damit alle Vereinsmitglieder von ihren eigenen Handys auf denselben Kellerbestand zugreifen können, kannst du hier ein kostenloses Supabase-Projekt (supabase.com) hinterlegen.
+                </p>
               </div>
 
-              {twoFactorError && (
-                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
-                  {twoFactorError}
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1">
+                    Supabase Project URL (z. B. https://xyz.supabase.co)
+                  </label>
+                  <input
+                    type="url"
+                    value={settingsForm.supabaseUrl}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, supabaseUrl: e.target.value })
+                    }
+                    placeholder="https://dein-projekt.supabase.co"
+                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
+                  />
                 </div>
-              )}
 
-              {!settings.adminEmail?.trim() ? (
-                /* Erstmalige Einrichtung der 2FA-E-Mail-Adresse */
-                <div className="p-4 rounded-xl bg-slate-950 border border-sky-500/30 space-y-3">
-                  <p className="text-xs text-slate-300 leading-relaxed">
-                    Hinterlege hier einmalig deine <strong>Admin-E-Mail-Adresse für die 2-Faktor-Authentifizierung (2FA)</strong>. Sobald sie gespeichert ist, können das Admin-Passwort und die 2FA-E-Mail-Adresse nur noch nach Bestätigung über diese E-Mail geändert werden.
-                  </p>
-                  <div className="flex flex-col sm:flex-row gap-2">
-                    <div className="relative flex-1">
-                      <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="email"
-                        value={initial2FAEmailInput}
-                        onChange={(e) => setInitial2FAEmailInput(e.target.value)}
-                        placeholder="deine-admin-email@beispiel.de"
-                        className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"
-                      />
-                    </div>
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1">
+                    Supabase Anon / Public Key
+                  </label>
+                  <input
+                    type="password"
+                    value={settingsForm.supabaseAnonKey}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, supabaseAnonKey: e.target.value })
+                    }
+                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(SUPABASE_SETUP_SQL);
+                      setCopiedSql(true);
+                      setTimeout(() => setCopiedSql(false), 3000);
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-sky-300 border border-slate-700 cursor-pointer"
+                  >
+                    {copiedSql ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                    <span>
+                      {copiedSql
+                        ? 'SQL-Skript kopiert!'
+                        : 'SQL-Skript für Tabellen-Einrichtung kopieren'}
+                    </span>
+                  </button>
+
+                  {settings.supabaseUrl && settings.supabaseAnonKey && (
                     <button
                       type="button"
-                      onClick={handleSaveInitial2FAEmail}
-                      className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer shrink-0"
+                      onClick={onManualSync}
+                      disabled={isSyncing}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-xs font-semibold text-emerald-300 border border-emerald-500/40 cursor-pointer"
                     >
-                      <ShieldCheck className="w-4 h-4" />
-                      <span>2FA-E-Mail aktivieren</span>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* Aktiver 2FA-Schutz */
-                <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                    <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
-                      <span className="text-slate-400 block mb-0.5">Aktuelles Admin-Passwort:</span>
-                      <span className="font-bold text-white tracking-widest">••••••••••••</span>
-                      <span className="text-[11px] text-emerald-400 block mt-0.5">
-                        Verborgen & durch E-Mail-2FA geschützt
-                      </span>
-                    </div>
-                    <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
-                      <span className="text-slate-400 block mb-0.5">Hinterlegte 2FA-E-Mail-Adresse:</span>
-                      <span className="font-bold text-sky-300 break-all">{settings.adminEmail}</span>
-                      <span className="text-[11px] text-slate-400 block mt-0.5">
-                        Empfänger für 2FA-Bestätigungen
-                      </span>
-                    </div>
-                  </div>
-
-                  {twoFactorStage === 'idle' && (
-                    <button
-                      type="button"
-                      onClick={handleRequest2FACode}
-                      disabled={twoFactorLoading}
-                      className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-semibold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
-                    >
-                      <KeyRound className="w-4 h-4" />
-                      <span>
-                        {twoFactorLoading
-                          ? 'Sende 2FA-E-Mail...'
-                          : `Passwort oder 2FA-E-Mail ändern (2FA an ${settings.adminEmail} senden)`}
-                      </span>
+                      <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
+                      <span>Jetzt mit Cloud synchronisieren</span>
                     </button>
                   )}
+                </div>
+              </div>
 
-                  {twoFactorStage === 'code_sent' && (
-                    <form onSubmit={handleVerify2FACode} className="space-y-3 pt-2 border-t border-slate-800">
-                      <p className="text-xs text-sky-200 leading-relaxed">
-                        Wir haben eine 2FA-E-Mail an <strong>{settings.adminEmail}</strong> gesendet. Gib hier den <strong>6-stelligen Code</strong> aus der E-Mail ein (oder klicke auf den Bestätigungs-Link in der E-Mail bzw. füge die Link-Adresse hier ein):
-                      </p>
-                      <div className="flex flex-col sm:flex-row gap-2">
+              {/* Optionale KI-Erkennung */}
+              <div className="pt-4 border-t border-slate-800 space-y-3">
+                <h4 className="font-bold text-white text-sm flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-amber-400" />
+                  <span>Optionale KI-Unterstützung für Freitext-Erkennung</span>
+                </h4>
+                <p className="text-xs text-slate-400">
+                  Die lokale Texterkennung funktioniert bereits komplett kostenlos und offline. Optional kannst du zusätzlich einen Gemini- oder OpenAI-API-Key hinterlegen.
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                  <select
+                    value={settingsForm.aiProvider}
+                    onChange={(e) =>
+                      setSettingsForm({
+                        ...settingsForm,
+                        aiProvider: e.target.value as 'gemini' | 'openai',
+                      })
+                    }
+                    className="px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
+                  >
+                    <option value="gemini">Google Gemini API</option>
+                    <option value="openai">OpenAI API</option>
+                  </select>
+                  <input
+                    type="password"
+                    value={settingsForm.aiApiKey}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, aiApiKey: e.target.value })
+                    }
+                    placeholder="Optionaler API-Key..."
+                    className="sm:col-span-2 px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
+                  />
+                </div>
+              </div>
+
+              {/* Vereinsname */}
+              <div className="pt-4 border-t border-slate-800 space-y-3">
+                <h4 className="font-bold text-white text-sm">Vereinsname</h4>
+                <div>
+                  <label className="block text-xs text-slate-300 mb-1">Name des Vereins / Kellers</label>
+                  <input
+                    type="text"
+                    value={settingsForm.clubName}
+                    onChange={(e) =>
+                      setSettingsForm({ ...settingsForm, clubName: e.target.value })
+                    }
+                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  // Passwort & 2FA-E-Mail sind ausschließlich über den 2FA-Bereich änderbar
+                  const safeSettings: AppSettings = {
+                    ...settingsForm,
+                    adminPassword: settings.adminPassword,
+                    adminEmail: settings.adminEmail,
+                    allowedMembers: activeAllowedMembers,
+                  };
+                  onUpdateSettings(safeSettings);
+                  showBanner('Einstellungen und Datenbank-Verbindung gespeichert!');
+                }}
+                className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-sm shadow-lg shadow-sky-500/20 cursor-pointer"
+              >
+                <Check className="w-4 h-4 stroke-[2.5]" />
+                <span>Allgemeine Einstellungen speichern</span>
+              </button>
+
+              {/* 2FA-Geschützter Bereich: Admin-Passwort & 2FA-E-Mail */}
+              <div className="pt-5 border-t border-slate-800 space-y-4">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="font-bold text-white text-sm flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    <span>Admin-Passwort & 2FA-Schutz (Zwei-Faktor-Authentifizierung)</span>
+                  </h4>
+                  <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold">
+                    Geheim & geschützt
+                  </span>
+                </div>
+
+                {twoFactorError && (
+                  <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
+                    {twoFactorError}
+                  </div>
+                )}
+
+                {!settings.adminEmail?.trim() ? (
+                  /* Erstmalige Einrichtung der 2FA-E-Mail-Adresse */
+                  <div className="p-4 rounded-xl bg-slate-950 border border-sky-500/30 space-y-3">
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Hinterlege hier einmalig deine <strong>Admin-E-Mail-Adresse für die 2-Faktor-Authentifizierung (2FA)</strong>. Sobald sie gespeichert ist, können das Admin-Passwort und die 2FA-E-Mail-Adresse nur noch nach Bestätigung über diese E-Mail geändert werden.
+                    </p>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <div className="relative flex-1">
+                        <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                         <input
-                          type="text"
-                          required
-                          value={twoFactorCodeInput}
-                          onChange={(e) => setTwoFactorCodeInput(e.target.value)}
-                          placeholder="6-stelliger Code oder Bestätigungs-Link..."
-                          className="flex-1 px-3.5 py-2 rounded-xl bg-slate-900 border border-sky-500 text-sm text-white font-semibold"
+                          type="email"
+                          value={initial2FAEmailInput}
+                          onChange={(e) => setInitial2FAEmailInput(e.target.value)}
+                          placeholder="deine-admin-email@beispiel.de"
+                          className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"
                         />
-                        <button
-                          type="submit"
-                          disabled={twoFactorLoading || !twoFactorCodeInput.trim()}
-                          className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
-                        >
-                          {twoFactorLoading ? 'Prüfe...' : 'Code bestätigen'}
-                        </button>
                       </div>
-                      <div className="flex items-center justify-between text-xs">
-                        <button
-                          type="button"
-                          onClick={handleRequest2FACode}
-                          disabled={twoFactorLoading}
-                          className="text-sky-400 hover:underline cursor-pointer"
-                        >
-                          E-Mail erneut senden
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTwoFactorStage('idle');
-                            setTwoFactorError(null);
-                          }}
-                          className="text-slate-400 hover:text-white cursor-pointer"
-                        >
-                          Abbrechen
-                        </button>
+                      <button
+                        type="button"
+                        onClick={handleSaveInitial2FAEmail}
+                        className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer shrink-0"
+                      >
+                        <ShieldCheck className="w-4 h-4" />
+                        <span>2FA-E-Mail aktivieren</span>
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  /* Aktiver 2FA-Schutz */
+                  <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
+                        <span className="text-slate-400 block mb-0.5">Aktuelles Admin-Passwort:</span>
+                        <span className="font-bold text-white tracking-widest">••••••••••••</span>
+                        <span className="text-[11px] text-emerald-400 block mt-0.5">
+                          Verborgen & durch E-Mail-2FA geschützt
+                        </span>
                       </div>
-                    </form>
-                  )}
+                      <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
+                        <span className="text-slate-400 block mb-0.5">Hinterlegte 2FA-E-Mail-Adresse:</span>
+                        <span className="font-bold text-sky-300 break-all">{settings.adminEmail}</span>
+                        <span className="text-[11px] text-slate-400 block mt-0.5">
+                          Empfänger für 2FA-Bestätigungen
+                        </span>
+                      </div>
+                    </div>
+
+                    {twoFactorStage === 'idle' && (
+                      <button
+                        type="button"
+                        onClick={handleRequest2FACode}
+                        disabled={twoFactorLoading}
+                        className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-semibold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
+                      >
+                        <KeyRound className="w-4 h-4" />
+                        <span>
+                          {twoFactorLoading
+                            ? 'Sende 2FA-E-Mail...'
+                            : `Passwort oder 2FA-E-Mail ändern (2FA an ${settings.adminEmail} senden)`}
+                        </span>
+                      </button>
+                    )}
+
+                    {twoFactorStage === 'code_sent' && (
+                      <form onSubmit={handleVerify2FACode} className="space-y-3 pt-2 border-t border-slate-800">
+                        <p className="text-xs text-sky-200 leading-relaxed">
+                          Wir haben eine 2FA-E-Mail an <strong>{settings.adminEmail}</strong> gesendet.
+                        </p>
+                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1.5 leading-relaxed">
+                          <p className="font-semibold text-amber-300">
+                            Wichtig bei „localhost hat die Verbindung abgelehnt“ (ERR_CONNECTION_REFUSED):
+                          </p>
+                          <p>
+                            1. <strong>Sofort-Lösung:</strong> Wenn nach dem Klick auf den E-Mail-Link die Fehlerseite <code>localhost:3000/#access_token=...</code> erscheint, kopiere einfach diese komplette <strong>localhost-Adresse oben aus deiner Browser-Adresszeile</strong> (oder kopiere den Link direkt aus der E-Mail per Rechtsklick) und füge sie unten in das Feld ein!
+                          </p>
+                          <p>
+                            2. <strong>Dauerhafte Behebung in Supabase:</strong> Öffne in deinem Supabase-Dashboard <em>Authentication → URL Configuration</em> und ändere die <strong>Site URL</strong> von <code>http://localhost:3000</code> auf <code>https://erdbeerwaffel311.github.io/inventurprogramm/</code>.
+                          </p>
+                        </div>
+                        <div className="flex flex-col sm:flex-row gap-2">
+                          <input
+                            type="text"
+                            required
+                            value={twoFactorCodeInput}
+                            onChange={(e) => setTwoFactorCodeInput(e.target.value)}
+                            placeholder="localhost-URL aus Adresszeile, E-Mail-Link oder 6-stelligen Code einfügen..."
+                            className="flex-1 px-3.5 py-2 rounded-xl bg-slate-900 border border-sky-500 text-sm text-white font-semibold"
+                          />
+                          <button
+                            type="submit"
+                            disabled={twoFactorLoading || !twoFactorCodeInput.trim()}
+                            className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
+                          >
+                            {twoFactorLoading ? 'Prüfe...' : '2FA bestätigen'}
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <button
+                            type="button"
+                            onClick={handleRequest2FACode}
+                            disabled={twoFactorLoading}
+                            className="text-sky-400 hover:underline cursor-pointer"
+                          >
+                            E-Mail erneut senden
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTwoFactorStage('idle');
+                              setTwoFactorError(null);
+                            }}
+                            className="text-slate-400 hover:text-white cursor-pointer"
+                          >
+                            Abbrechen
+                          </button>
+                        </div>
+                      </form>
+                    )}
 
                   {twoFactorStage === 'verified' && (
                     <form
@@ -1670,6 +1815,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 <span>Aushang drucken</span>
               </button>
             </div>
+          </div>
           </div>
         </div>
       )}

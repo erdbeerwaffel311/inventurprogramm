@@ -28,7 +28,7 @@ import {
   InventoryTransaction,
   ParsedTextItem,
 } from '../types';
-import { CATEGORIES } from '../data/defaultData';
+import { CATEGORIES, DEFAULT_ALLOWED_MEMBERS } from '../data/defaultData';
 import {
   formatEnteredAmount,
   formatGermanNumber,
@@ -73,10 +73,37 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
   // Bevorzugte Einheit pro Artikel in der Listenansicht (z. B. "Kiste" vs "Flasche")
   const [unitPreference, setUnitPreference] = useState<Record<string, string>>({});
 
-  // Personen- & Event-Felder (Person wird lokal auf dem Handy gespeichert für Komfort)
-  const [personName, setPersonName] = useState<string>(
-    () => localStorage.getItem('vk_last_person_name') || ''
+  // Erlaubte Namensliste aus den Einstellungen
+  const allowedMembers = useMemo(
+    () =>
+      Array.isArray(settings.allowedMembers) && settings.allowedMembers.length > 0
+        ? settings.allowedMembers
+        : DEFAULT_ALLOWED_MEMBERS,
+    [settings.allowedMembers]
   );
+
+  function findAllowedMember(raw: string): string | null {
+    const clean = raw.trim().toLowerCase().replace(/\s+/g, ' ');
+    if (!clean) return null;
+    const found = allowedMembers.find(
+      (m) => m.trim().toLowerCase().replace(/\s+/g, ' ') === clean
+    );
+    return found || null;
+  }
+
+  // Personen- & Event-Felder (Person wird lokal auf dem Handy gespeichert für Komfort)
+  const [personName, setPersonName] = useState<string>(() => {
+    const saved = localStorage.getItem('vk_last_person_name') || '';
+    const list =
+      Array.isArray(settings.allowedMembers) && settings.allowedMembers.length > 0
+        ? settings.allowedMembers
+        : DEFAULT_ALLOWED_MEMBERS;
+    const match = list.find(
+      (m) => m.trim().toLowerCase() === saved.trim().toLowerCase()
+    );
+    return match || '';
+  });
+  const [showMemberDropdown, setShowMemberDropdown] = useState<boolean>(false);
   const [eventName, setEventName] = useState<string>('');
   const [note, setNote] = useState<string>('');
 
@@ -95,7 +122,16 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
   const [successBanner, setSuccessBanner] = useState<string | null>(null);
   const [warningBanner, setWarningBanner] = useState<string | null>(null);
   const [nameError, setNameError] = useState<boolean>(false);
+  const [nameErrorMessage, setNameErrorMessage] = useState<string>('');
   const personInputRef = React.useRef<HTMLInputElement>(null);
+
+  const filteredMemberSuggestions = useMemo(() => {
+    const q = personName.trim().toLowerCase();
+    if (!q) return allowedMembers;
+    const exactMatch = allowedMembers.some((m) => m.toLowerCase() === q);
+    if (exactMatch) return allowedMembers;
+    return allowedMembers.filter((m) => m.toLowerCase().includes(q));
+  }, [personName, allowedMembers]);
 
   // Aktuell offen ausgeliehene / entnommene Menge pro Artikel (in Haupteinheit)
   const openWithdrawnByItem = useMemo(() => {
@@ -445,23 +481,47 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
   function handleConfirmCartBooking() {
     if (cartEntries.length === 0) return;
 
+    const trimmedName = personName.trim();
+
     // Bei Entnahme aus dem Keller ist der Name zwingend erforderlich
-    if (mode === 'withdraw' && !personName.trim()) {
+    if (mode === 'withdraw' && !trimmedName) {
+      const msg =
+        'Bitte gib deinen Namen ein – bei der Entnahme aus dem Keller ist der Name ein Pflichtfeld.';
       setNameError(true);
+      setNameErrorMessage(msg);
       personInputRef.current?.focus();
-      showWarningBanner('Bitte gib deinen Namen ein – bei der Entnahme aus dem Keller ist der Name ein Pflichtfeld.');
+      showWarningBanner(msg);
       return;
     }
 
+    // Sofern ein Name angegeben ist (bei Entnahme immer), muss er in der Liste der erlaubten Namen stehen
+    let canonicalName: string | undefined = undefined;
+    if (trimmedName) {
+      const matched = findAllowedMember(trimmedName);
+      if (!matched) {
+        const msg = `Der Name „${trimmedName}“ ist nicht freigeschaltet. Bitte wähle deinen vollständigen Namen aus der hinterlegten Namensliste.`;
+        setNameError(true);
+        setNameErrorMessage(msg);
+        setShowMemberDropdown(true);
+        personInputRef.current?.focus();
+        showWarningBanner(msg);
+        return;
+      }
+      canonicalName = matched;
+    }
+
     setNameError(false);
-    if (personName.trim()) {
-      localStorage.setItem('vk_last_person_name', personName.trim());
+    setNameErrorMessage('');
+    setShowMemberDropdown(false);
+    if (canonicalName) {
+      setPersonName(canonicalName);
+      localStorage.setItem('vk_last_person_name', canonicalName);
     }
 
     onExecuteBooking({
       mode,
       entries: cartEntries,
-      personName: personName.trim() || undefined,
+      personName: canonicalName,
       eventName: eventName.trim() || undefined,
       note: note.trim() || undefined,
     });
@@ -482,6 +542,18 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
 
   function handleConfirmEventReturn() {
     if (!activeReturnTx) return;
+
+    let canonicalName: string | undefined = activeReturnTx.personName;
+    if (personName.trim()) {
+      const matched = findAllowedMember(personName.trim());
+      if (!matched && personName.trim() !== activeReturnTx.personName) {
+        const msg = `Der Name „${personName.trim()}“ steht nicht auf der erlaubten Namensliste.`;
+        showWarningBanner(msg);
+        return;
+      }
+      canonicalName = matched || activeReturnTx.personName;
+    }
+
     const entries: CartEntry[] = Object.entries(returnAmounts)
       .filter(([, val]) => val.amount > 0)
       .map(([itemId, val]) => ({
@@ -495,7 +567,7 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
       onExecuteBooking({
         mode: 'return',
         entries: [],
-        personName: personName.trim() || activeReturnTx.personName,
+        personName: canonicalName,
         eventName: eventName.trim() || activeReturnTx.eventName,
         note: 'Alles restlos aufgebraucht (keine Rest-Rückgabe)',
         relatedTransactionId: activeReturnTx.id,
@@ -505,14 +577,14 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
       return;
     }
 
-    if (personName.trim()) {
-      localStorage.setItem('vk_last_person_name', personName.trim());
+    if (canonicalName) {
+      localStorage.setItem('vk_last_person_name', canonicalName);
     }
 
     onExecuteBooking({
       mode: 'return',
       entries,
-      personName: personName.trim() || activeReturnTx.personName,
+      personName: canonicalName,
       eventName: eventName.trim() || activeReturnTx.eventName,
       note: note.trim() || `Rückgabe zu ${activeReturnTx.eventName || 'Entnahme'}`,
       relatedTransactionId: activeReturnTx.id,
@@ -1411,6 +1483,40 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
               {/* Schnell-Chips für Event / Zweck */}
               <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div className="relative">
+                  {showMemberDropdown && filteredMemberSuggestions.length > 0 && (
+                    <div className="absolute bottom-full left-0 right-0 mb-1.5 max-h-48 overflow-y-auto rounded-xl bg-slate-900 border border-slate-700 shadow-2xl z-50 divide-y divide-slate-800/80">
+                      <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 bg-slate-950/80 sticky top-0">
+                        Berechtigte Personen ({filteredMemberSuggestions.length}):
+                      </div>
+                      {filteredMemberSuggestions.map((member) => {
+                        const isSelected =
+                          member.toLowerCase() === personName.trim().toLowerCase();
+                        return (
+                          <button
+                            key={member}
+                            type="button"
+                            onMouseDown={(e) => {
+                              // Verhindert, dass onBlur vor dem Klick feuert
+                              e.preventDefault();
+                              setPersonName(member);
+                              setNameError(false);
+                              setNameErrorMessage('');
+                              setShowMemberDropdown(false);
+                            }}
+                            className={`w-full text-left px-3 py-2 text-xs sm:text-sm flex items-center justify-between transition cursor-pointer ${
+                              isSelected
+                                ? 'bg-sky-500/20 text-sky-300 font-semibold'
+                                : 'text-slate-200 hover:bg-slate-800'
+                            }`}
+                          >
+                            <span>{member}</span>
+                            {isSelected && <Check className="w-3.5 h-3.5 text-sky-400" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+
                   <User
                     className={`w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 ${
                       nameError ? 'text-rose-400' : 'text-slate-400'
@@ -1421,10 +1527,16 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
                     type="text"
                     required={mode === 'withdraw'}
                     value={personName}
+                    onFocus={() => setShowMemberDropdown(true)}
+                    onBlur={() => {
+                      setTimeout(() => setShowMemberDropdown(false), 150);
+                    }}
                     onChange={(e) => {
                       setPersonName(e.target.value);
+                      setShowMemberDropdown(true);
                       if (e.target.value.trim()) {
                         setNameError(false);
+                        setNameErrorMessage('');
                       }
                     }}
                     placeholder="Dein Name"
@@ -1469,7 +1581,8 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
             </div>
             {nameError && (
               <p className="text-xs text-rose-400 font-medium">
-                Bitte gib deinen Namen ein – bei der Entnahme aus dem Keller ist die Namensangabe verpflichtend.
+                {nameErrorMessage ||
+                  'Bitte gib deinen Namen ein – bei der Entnahme aus dem Keller ist die Namensangabe verpflichtend.'}
               </p>
             )}
           </div>

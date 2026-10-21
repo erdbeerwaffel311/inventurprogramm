@@ -7,6 +7,7 @@ export interface CloudConfigPayload {
   clubName: string;
   adminPassword: string;
   adminEmail?: string;
+  allowedMembers?: string[];
   categories: CategoryInfo[];
   deletedCategoryIds?: string[];
   commonEvents: string[];
@@ -116,7 +117,8 @@ export async function sendAdmin2FAEmail(
 }
 
 /**
- * Prüft den eingegebenen 2FA-Code (6-8-stelliger Zahlencode) oder einen aus der E-Mail eingefügten Bestätigungs-Link.
+ * Prüft den eingegebenen 2FA-Code (6-8-stelliger Zahlencode), einen aus der E-Mail kopierten
+ * Bestätigungs-Link oder die Weiterleitungs-URL (auch falls Supabase auf localhost:3000 weitergeleitet hat).
  */
 export async function verifyAdmin2FACode(
   settings: AppSettings,
@@ -128,28 +130,64 @@ export async function verifyAdmin2FACode(
     throw new Error('Keine gültige Supabase-Verbindung vorhanden.');
   }
 
-  const cleanEmail = email.trim();
+  const cleanEmail = email.trim().toLowerCase();
   const rawInput = tokenOrLink.trim();
   if (!rawInput) return false;
 
-  // Falls der Nutzer den kompletten Link aus der E-Mail kopiert und eingefügt hat:
-  if (rawInput.startsWith('http://') || rawInput.startsWith('https://')) {
+  // 1. Falls eine URL eingefügt wurde (entweder der Link aus der E-Mail ODER die localhost:3000/#access_token=... Adresse)
+  if (
+    rawInput.startsWith('http://') ||
+    rawInput.startsWith('https://') ||
+    rawInput.startsWith('localhost') ||
+    rawInput.includes('access_token=') ||
+    rawInput.includes('token=')
+  ) {
     try {
-      const parsedUrl = new URL(rawInput);
+      const normalizedUrlStr = rawInput.startsWith('localhost')
+        ? `http://${rawInput}`
+        : rawInput.startsWith('http')
+        ? rawInput
+        : `https://dummy.local/?${rawInput.replace(/^#/, '')}`;
+      const parsedUrl = new URL(normalizedUrlStr);
+
+      // Fall A: #access_token=... in der URL (z. B. nach Klick auf den Link -> http://localhost:3000/#access_token=...)
+      const hashParams = new URLSearchParams(parsedUrl.hash.replace(/^#/, ''));
+      const accessToken =
+        hashParams.get('access_token') || parsedUrl.searchParams.get('access_token');
+      if (accessToken) {
+        const { data, error } = await client.auth.getUser(accessToken);
+        if (!error && data?.user?.email?.toLowerCase() === cleanEmail) {
+          return true;
+        }
+      }
+
+      // Fall B: ?code=... (PKCE Code in der Weiterleitungs-URL)
+      const pkceCode = parsedUrl.searchParams.get('code');
+      if (pkceCode) {
+        const { data, error } = await client.auth.exchangeCodeForSession(pkceCode);
+        if (!error && (data?.user?.email?.toLowerCase() === cleanEmail || data?.session)) {
+          return true;
+        }
+      }
+
+      // Fall C: Ungeklickter Bestätigungs-Link direkt aus der E-Mail kopiert (?token=...&type=magiclink)
       const tokenHash =
         parsedUrl.searchParams.get('token_hash') || parsedUrl.searchParams.get('token');
-      const linkType = (parsedUrl.searchParams.get('type') || 'magiclink') as
-        | 'magiclink'
-        | 'signup'
-        | 'email';
-
       if (tokenHash) {
-        const { data, error } = await client.auth.verifyOtp({
-          token_hash: tokenHash,
-          type: linkType,
-        });
-        if (!error && data?.session) {
-          return true;
+        const linkTypes: Array<'magiclink' | 'email' | 'signup'> = [
+          (parsedUrl.searchParams.get('type') as 'magiclink' | 'email' | 'signup') || 'magiclink',
+          'magiclink',
+          'email',
+          'signup',
+        ];
+        for (const t of linkTypes) {
+          const { data, error } = await client.auth.verifyOtp({
+            token_hash: tokenHash,
+            type: t,
+          });
+          if (!error && (data?.session || data?.user)) {
+            return true;
+          }
         }
       }
     } catch {
@@ -157,7 +195,7 @@ export async function verifyAdmin2FACode(
     }
   }
 
-  // Standard: 6- bis 8-stelligen OTP-Code prüfen
+  // 2. Standard: 6- bis 8-stelligen OTP-Code prüfen
   const cleanToken = rawInput.replace(/\s+/g, '');
   const typesToTry: Array<'email' | 'magiclink' | 'signup'> = ['email', 'magiclink', 'signup'];
 
@@ -226,6 +264,7 @@ export async function pushConfigToSupabase(
     clubName: settings.clubName,
     adminPassword: settings.adminPassword,
     adminEmail: settings.adminEmail || '',
+    allowedMembers: settings.allowedMembers || [],
     categories: settings.categories,
     deletedCategoryIds,
     commonEvents: settings.commonEvents,
@@ -263,6 +302,7 @@ export async function pushToSupabase(
     clubName: settings.clubName,
     adminPassword: settings.adminPassword,
     adminEmail: settings.adminEmail || '',
+    allowedMembers: settings.allowedMembers || [],
     categories: settings.categories,
     commonEvents: settings.commonEvents,
     updatedAt: now,
