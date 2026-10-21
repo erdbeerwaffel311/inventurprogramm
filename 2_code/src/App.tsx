@@ -24,6 +24,7 @@ import {
   pullFromSupabase,
   pushConfigToSupabase,
   pushToSupabase,
+  verifyAdmin2FACode,
 } from './utils/supabaseSync';
 import { ActiveTab, Header } from './components/Header';
 import { OpenBookingView } from './components/OpenBookingView';
@@ -84,13 +85,34 @@ export const App: React.FC = () => {
 
   // Automatische Erkennung beim Öffnen über den 2FA-Bestätigungslink aus der E-Mail
   useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
     const has2FAParam =
-      new URLSearchParams(window.location.search).get('2fa') === 'verify' ||
+      searchParams.get('2fa') === 'verify' ||
+      Boolean(searchParams.get('2fa_code')) ||
       window.location.hash.includes('access_token=');
     if (!has2FAParam) return;
 
     const client = getSupabaseClient(settings);
     if (!client) return;
+
+    if (
+      (searchParams.get('2fa_code') ||
+        searchParams.get('code') ||
+        searchParams.get('token') ||
+        window.location.hash.includes('access_token=')) &&
+      settings.adminEmail
+    ) {
+      verifyAdmin2FACode(settings, settings.adminEmail, window.location.href)
+        .then((ok) => {
+          if (ok) {
+            setInitial2FAVerified(true);
+            setIsAdminUnlocked(true);
+            setActiveTab('admin');
+            window.history.replaceState({}, document.title, window.location.pathname);
+          }
+        })
+        .catch(() => {});
+    }
 
     const { data: sub } = client.auth.onAuthStateChange((event, session) => {
       if (

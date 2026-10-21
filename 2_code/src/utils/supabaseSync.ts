@@ -8,6 +8,11 @@ export interface CloudConfigPayload {
   adminPassword: string;
   adminEmail?: string;
   allowedMembers?: string[];
+  twoFactorToken?: {
+    code: string;
+    email: string;
+    expiresAt: string;
+  };
   categories: CategoryInfo[];
   deletedCategoryIds?: string[];
   commonEvents: string[];
@@ -88,11 +93,13 @@ export function getSupabaseClient(settings: AppSettings): SupabaseClient | null 
 
 /**
  * Sendet einen 2FA-Bestätigungscode / Magic-Link an die hinterlegte Admin-E-Mail-Adresse über Supabase Auth.
+ * Falls das kostenlose Supabase-Limit (max. 2 E-Mails/Stunde) erreicht ist, wird `rateLimited: true`
+ * zurückgegeben, damit das Eingabefeld trotzdem geöffnet wird und bereits empfangene Links/Codes genutzt werden können.
  */
 export async function sendAdmin2FAEmail(
   settings: AppSettings,
   targetEmail: string
-): Promise<void> {
+): Promise<{ rateLimited: boolean }> {
   const client = getSupabaseClient(settings);
   if (!client) {
     throw new Error('Keine gültige Supabase-Datenbankverbindung konfiguriert.');
@@ -112,8 +119,18 @@ export async function sendAdmin2FAEmail(
   });
 
   if (error) {
+    const msgLower = (error.message || '').toLowerCase();
+    if (
+      msgLower.includes('rate limit') ||
+      msgLower.includes('over_email_send_rate_limit') ||
+      error.status === 429
+    ) {
+      return { rateLimited: true };
+    }
     throw new Error(error.message || 'Fehler beim Senden der 2FA-E-Mail.');
   }
+
+  return { rateLimited: false };
 }
 
 /**
@@ -129,10 +146,36 @@ export async function verifyAdmin2FACode(
   if (!client) {
     throw new Error('Keine gültige Supabase-Verbindung vorhanden.');
   }
+  const sb = client;
 
   const cleanEmail = email.trim().toLowerCase();
   const rawInput = tokenOrLink.trim();
   if (!rawInput) return false;
+
+  // Hilfsprüfung gegen einen in der Cloud hinterlegten 2FA-Freigabecode (falls aktiv)
+  async function checkCloudTwoFactorToken(candidateCode: string): Promise<boolean> {
+    const cleanCandidate = candidateCode.trim();
+    if (!cleanCandidate) return false;
+    try {
+      const { data } = await sb
+        .from('keller_items')
+        .select('payload')
+        .eq('id', CONFIG_ROW_ID)
+        .maybeSingle();
+      const cfg = data?.payload as CloudConfigPayload | undefined;
+      if (
+        cfg?.twoFactorToken &&
+        cfg.twoFactorToken.code === cleanCandidate &&
+        cfg.twoFactorToken.email.toLowerCase() === cleanEmail &&
+        new Date(cfg.twoFactorToken.expiresAt).getTime() > Date.now()
+      ) {
+        return true;
+      }
+    } catch {
+      // Ignorieren
+    }
+    return false;
+  }
 
   // 1. Falls eine URL eingefügt wurde (entweder der Link aus der E-Mail ODER die localhost:3000/#access_token=... Adresse)
   if (
@@ -140,7 +183,8 @@ export async function verifyAdmin2FACode(
     rawInput.startsWith('https://') ||
     rawInput.startsWith('localhost') ||
     rawInput.includes('access_token=') ||
-    rawInput.includes('token=')
+    rawInput.includes('token=') ||
+    rawInput.includes('2fa_code=')
   ) {
     try {
       const normalizedUrlStr = rawInput.startsWith('localhost')
@@ -161,10 +205,14 @@ export async function verifyAdmin2FACode(
         }
       }
 
-      // Fall B: ?code=... (PKCE Code in der Weiterleitungs-URL)
-      const pkceCode = parsedUrl.searchParams.get('code');
-      if (pkceCode) {
-        const { data, error } = await client.auth.exchangeCodeForSession(pkceCode);
+      // Fall B: ?2fa_code=... oder ?code=... in der URL
+      const directCode =
+        parsedUrl.searchParams.get('2fa_code') || parsedUrl.searchParams.get('code');
+      if (directCode) {
+        if (await checkCloudTwoFactorToken(directCode)) {
+          return true;
+        }
+        const { data, error } = await client.auth.exchangeCodeForSession(directCode);
         if (!error && (data?.user?.email?.toLowerCase() === cleanEmail || data?.session)) {
           return true;
         }
@@ -174,6 +222,9 @@ export async function verifyAdmin2FACode(
       const tokenHash =
         parsedUrl.searchParams.get('token_hash') || parsedUrl.searchParams.get('token');
       if (tokenHash) {
+        if (await checkCloudTwoFactorToken(tokenHash)) {
+          return true;
+        }
         const linkTypes: Array<'magiclink' | 'email' | 'signup'> = [
           (parsedUrl.searchParams.get('type') as 'magiclink' | 'email' | 'signup') || 'magiclink',
           'magiclink',
@@ -195,8 +246,12 @@ export async function verifyAdmin2FACode(
     }
   }
 
-  // 2. Standard: 6- bis 8-stelligen OTP-Code prüfen
+  // 2. Prüfung gegen Cloud-Freigabecode oder 6- bis 8-stelligen Supabase OTP-Code
   const cleanToken = rawInput.replace(/\s+/g, '');
+  if (await checkCloudTwoFactorToken(cleanToken)) {
+    return true;
+  }
+
   const typesToTry: Array<'email' | 'magiclink' | 'signup'> = ['email', 'magiclink', 'signup'];
 
   for (const otpType of typesToTry) {

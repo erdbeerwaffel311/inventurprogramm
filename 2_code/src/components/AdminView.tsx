@@ -263,14 +263,22 @@ export const AdminView: React.FC<AdminViewProps> = ({
     setTwoFactorLoading(true);
     setTwoFactorError(null);
     try {
-      await sendAdmin2FAEmail(settings, settings.adminEmail);
+      const res = await sendAdmin2FAEmail(settings, settings.adminEmail);
       setTwoFactorStage('code_sent');
       setTwoFactorNewEmail(settings.adminEmail);
       setTwoFactorNewPassword('');
-      showBanner(`2FA-Bestätigungs-E-Mail wurde an ${settings.adminEmail} gesendet!`);
+      if (res.rateLimited) {
+        showBanner(
+          'Eingabefeld geöffnet! (Hinweis: Supabase erlaubt im Gratis-Tarif max. 2 neue E-Mails pro Stunde – du kannst deinen bestehenden Link oder Code direkt unten eingeben.)'
+        );
+      } else {
+        showBanner(`2FA-Bestätigungs-E-Mail wurde an ${settings.adminEmail} gesendet!`);
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Fehler beim Senden der 2FA-E-Mail.';
       setTwoFactorError(msg);
+      // Eingabefeld trotzdem öffnen, damit ein bereits empfangener Link/Code genutzt werden kann
+      setTwoFactorStage('code_sent');
     } finally {
       setTwoFactorLoading(false);
     }
@@ -1631,19 +1639,33 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     </div>
 
                     {twoFactorStage === 'idle' && (
-                      <button
-                        type="button"
-                        onClick={handleRequest2FACode}
-                        disabled={twoFactorLoading}
-                        className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-semibold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
-                      >
-                        <KeyRound className="w-4 h-4" />
-                        <span>
-                          {twoFactorLoading
-                            ? 'Sende 2FA-E-Mail...'
-                            : `Passwort oder 2FA-E-Mail ändern (2FA an ${settings.adminEmail} senden)`}
-                        </span>
-                      </button>
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <button
+                          type="button"
+                          onClick={handleRequest2FACode}
+                          disabled={twoFactorLoading}
+                          className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-semibold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
+                        >
+                          <KeyRound className="w-4 h-4" />
+                          <span>
+                            {twoFactorLoading
+                              ? 'Sende 2FA-E-Mail...'
+                              : `Passwort / 2FA-E-Mail ändern (E-Mail senden)`}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTwoFactorStage('code_sent');
+                            setTwoFactorNewEmail(settings.adminEmail || '');
+                            setTwoFactorNewPassword('');
+                            setTwoFactorError(null);
+                          }}
+                          className="flex items-center justify-center gap-1.5 py-2.5 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-medium cursor-pointer"
+                        >
+                          <span>Code / Link bereits vorhanden</span>
+                        </button>
+                      </div>
                     )}
 
                     {twoFactorStage === 'code_sent' && (
