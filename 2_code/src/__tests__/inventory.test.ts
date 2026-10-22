@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_ITEMS } from '../data/defaultData';
+import {
+  DEFAULT_ITEMS,
+  DEFAULT_MEMBER_ACCOUNTS,
+  buildMemberUsername,
+  normalizeUsernameForComparison,
+} from '../data/defaultData';
 import { InventoryItem } from '../types';
 import { formatStockDisplay, toPrimaryUnitQuantity } from '../utils/units';
 import { parseFreeTextBlock } from '../utils/textParser';
@@ -207,3 +212,30 @@ describe('CSV / Excel Export & Import für die Erstinventur', () => {
     expect(lichterkette.category).toBe('cat-deko-partybedarf');
   });
 });
+
+describe('Mitglieder-Login & Benutzernamen-Format (@schuelerunion.at)', () => {
+  it('erzeugt vorname.nachname@schuelerunion.at inkl. Bindestrich-Auflösung und Doppel-Nachnamen', () => {
+    expect(buildMemberUsername('Elias Mantler')).toBe('elias.mantler@schuelerunion.at');
+    expect(buildMemberUsername('Celil-Kaan Beler')).toBe('celil.kaan.beler@schuelerunion.at');
+    expect(buildMemberUsername('Sophia-Maria Thoma')).toBe('sophia.maria.thoma@schuelerunion.at');
+    expect(buildMemberUsername('Simon Märker')).toBe('simon.maerker@schuelerunion.at');
+    expect(buildMemberUsername('Max Müller-Lüdenscheidt')).toBe(
+      'max.mueller.luedenscheidt@schuelerunion.at'
+    );
+  });
+
+  it('normalisiert Umlaute beim Login-Vergleich flexibel', () => {
+    expect(normalizeUsernameForComparison('simon.märker@schuelerunion.at')).toBe(
+      'simon.maerker@schuelerunion.at'
+    );
+  });
+
+  it('enthält alle 28 berechtigten Mitglieder mit individuellem Zufallspasswort', () => {
+    expect(DEFAULT_MEMBER_ACCOUNTS.length).toBe(28);
+    for (const acc of DEFAULT_MEMBER_ACCOUNTS) {
+      expect(acc.username.endsWith('@schuelerunion.at')).toBe(true);
+      expect(acc.password.length).toBeGreaterThanOrEqual(8);
+    }
+  });
+});
+

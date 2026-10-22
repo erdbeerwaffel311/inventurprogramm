@@ -43,6 +43,7 @@ interface OpenBookingViewProps {
   items: InventoryItem[];
   transactions: InventoryTransaction[];
   settings: AppSettings;
+  currentUserName: string;
   selectedReturnTxId: string | null;
   onClearSelectedReturnTx: () => void;
   onExecuteBooking: (params: {
@@ -59,6 +60,7 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
   items,
   transactions,
   settings,
+  currentUserName,
   selectedReturnTxId,
   onClearSelectedReturnTx,
   onExecuteBooking,
@@ -91,18 +93,13 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
     return found || null;
   }
 
-  // Personen- & Event-Felder (Person wird lokal auf dem Handy gespeichert für Komfort)
-  const [personName, setPersonName] = useState<string>(() => {
-    const saved = localStorage.getItem('vk_last_person_name') || '';
-    const list =
-      Array.isArray(settings.allowedMembers) && settings.allowedMembers.length > 0
-        ? settings.allowedMembers
-        : DEFAULT_ALLOWED_MEMBERS;
-    const match = list.find(
-      (m) => m.trim().toLowerCase() === saved.trim().toLowerCase()
-    );
-    return match || '';
-  });
+  // Personen- & Event-Felder (Person wird automatisch aus dem eingeloggten Account übernommen)
+  const [personName, setPersonName] = useState<string>(() => currentUserName || '');
+  useEffect(() => {
+    if (currentUserName) {
+      setPersonName(currentUserName);
+    }
+  }, [currentUserName]);
   const [showMemberDropdown, setShowMemberDropdown] = useState<boolean>(false);
   const [eventName, setEventName] = useState<string>('');
   const [note, setNote] = useState<string>('');

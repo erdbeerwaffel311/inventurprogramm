@@ -34,8 +34,15 @@ import {
   CategoryInfo,
   InventoryItem,
   InventoryTransaction,
+  MemberAccount,
 } from '../types';
-import { CATEGORIES, DEFAULT_ALLOWED_MEMBERS } from '../data/defaultData';
+import {
+  CATEGORIES,
+  DEFAULT_ALLOWED_MEMBERS,
+  buildMemberUsername,
+  generateRandomMemberPassword,
+  reconcileMemberAccounts,
+} from '../data/defaultData';
 import {
   formatGermanNumber,
   formatStockDisplay,
@@ -101,6 +108,10 @@ export const AdminView: React.FC<AdminViewProps> = ({
     Array.isArray(settings.allowedMembers) && settings.allowedMembers.length > 0
       ? settings.allowedMembers
       : DEFAULT_ALLOWED_MEMBERS;
+  const activeMemberAccounts: MemberAccount[] = reconcileMemberAccounts(
+    activeAllowedMembers,
+    settings.memberAccounts
+  );
 
   const [passwordInput, setPasswordInput] = useState('');
   const [passwordError, setPasswordError] = useState(false);
@@ -109,6 +120,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
   >('inventory');
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [newMemberName, setNewMemberName] = useState('');
+  const [memberPasswordDrafts, setMemberPasswordDrafts] = useState<Record<string, string>>({});
+  const [copiedCredentials, setCopiedCredentials] = useState(false);
 
   // State für Erstinventur (itemId -> { main: string, sub: string })
   const [counts, setCounts] = useState<Record<string, { main: string; sub: string }>>(() =>
@@ -192,13 +205,20 @@ export const AdminView: React.FC<AdminViewProps> = ({
     if (rawEntries.length === 0) return;
 
     const nextList = [...activeAllowedMembers];
+    const nextAccounts = [...activeMemberAccounts];
     let addedCount = 0;
+
     for (const candidate of rawEntries) {
       const exists = nextList.some(
         (m) => m.trim().toLowerCase() === candidate.toLowerCase()
       );
       if (!exists) {
         nextList.push(candidate);
+        nextAccounts.push({
+          name: candidate,
+          username: buildMemberUsername(candidate),
+          password: generateRandomMemberPassword(),
+        });
         addedCount++;
       }
     }
@@ -207,13 +227,14 @@ export const AdminView: React.FC<AdminViewProps> = ({
       const nextSettings: AppSettings = {
         ...settings,
         allowedMembers: nextList,
+        memberAccounts: nextAccounts,
       };
       setSettingsForm(nextSettings);
       onUpdateSettings(nextSettings);
       showBanner(
         addedCount === 1
-          ? `Person „${rawEntries[0]}“ wurde zur Namensliste hinzugefügt.`
-          : `${addedCount} Personen wurden zur Namensliste hinzugefügt.`
+          ? `Person „${rawEntries[0]}“ (${buildMemberUsername(rawEntries[0])}) wurde mit zufälligem Passwort angelegt.`
+          : `${addedCount} Personen wurden mit Zugangsdaten angelegt.`
       );
     }
     setNewMemberName('');
@@ -221,13 +242,41 @@ export const AdminView: React.FC<AdminViewProps> = ({
 
   function handleRemoveAllowedMember(memberToRemove: string) {
     const nextList = activeAllowedMembers.filter((m) => m !== memberToRemove);
+    const nextAccounts = activeMemberAccounts.filter(
+      (acc) => acc.name.toLowerCase() !== memberToRemove.toLowerCase()
+    );
     const nextSettings: AppSettings = {
       ...settings,
       allowedMembers: nextList,
+      memberAccounts: nextAccounts,
     };
     setSettingsForm(nextSettings);
     onUpdateSettings(nextSettings);
     showBanner(`Person „${memberToRemove}“ wurde aus der Namensliste entfernt.`);
+  }
+
+  function handleSaveMemberPassword(memberName: string, newPasswordRaw: string) {
+    const cleanPass = newPasswordRaw.trim();
+    if (!cleanPass) return;
+
+    const nextAccounts = activeMemberAccounts.map((acc) =>
+      acc.name.toLowerCase() === memberName.toLowerCase()
+        ? { ...acc, password: cleanPass }
+        : acc
+    );
+    const nextSettings: AppSettings = {
+      ...settings,
+      allowedMembers: activeAllowedMembers,
+      memberAccounts: nextAccounts,
+    };
+    setSettingsForm(nextSettings);
+    onUpdateSettings(nextSettings);
+    setMemberPasswordDrafts((prev) => {
+      const copy = { ...prev };
+      delete copy[memberName];
+      return copy;
+    });
+    showBanner(`Passwort für „${memberName}“ wurde gespeichert!`);
   }
 
   // Automatische Erkennung, falls der Nutzer auf den 2FA-Bestätigungslink in der E-Mail geklickt hat
@@ -1363,20 +1412,47 @@ export const AdminView: React.FC<AdminViewProps> = ({
       {/* SUB-TAB 4: PERSONEN, DATENBANK, QR-CODE & EINSTELLUNGEN */}
       {adminSubTab === 'settings' && (
         <div className="space-y-5 no-print">
-          {/* Berechtigte Personen / Namensliste verwalten */}
+          {/* Berechtigte Personen, Benutzernamen & Passwörter verwalten */}
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="font-bold text-white text-base flex items-center gap-2">
                   <Users className="w-5 h-5 text-sky-400" />
                   <span>
-                    Berechtigte Personen / Namensliste verwalten ({activeAllowedMembers.length})
+                    Berechtigte Personen & Login-Zugangsdaten ({activeMemberAccounts.length})
                   </span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  Bei der Namenseingabe im Buchungs-Menü werden ausschließlich Namen aus dieser Liste akzeptiert. Änderungen werden automatisch mit der Cloud synchronisiert.
+                  Jede Person erhält automatisch den Benutzernamen{' '}
+                  <code className="text-sky-300">vorname.nachname@schuelerunion.at</code> und ein zufälliges Passwort. Du kannst die Passwörter hier jederzeit einsehen und ändern.
                 </p>
               </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const lines = activeMemberAccounts.map(
+                    (acc) => `${acc.name}\t${acc.username}\t${acc.password}`
+                  );
+                  const text = `Name\tBenutzername\tPasswort\n${lines.join('\n')}`;
+                  navigator.clipboard.writeText(text);
+                  setCopiedCredentials(true);
+                  setTimeout(() => setCopiedCredentials(false), 3000);
+                }}
+                className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-semibold text-sky-300 border border-slate-700 cursor-pointer self-start sm:self-auto shrink-0"
+              >
+                {copiedCredentials ? (
+                  <>
+                    <Check className="w-4 h-4 text-emerald-400" />
+                    <span className="text-emerald-300">Alle Zugangsdaten kopiert!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-4 h-4" />
+                    <span>Alle Zugangsdaten kopieren</span>
+                  </>
+                )}
+              </button>
             </div>
 
             <form onSubmit={handleAddAllowedMember} className="flex flex-col sm:flex-row gap-2">
@@ -1386,7 +1462,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   type="text"
                   value={newMemberName}
                   onChange={(e) => setNewMemberName(e.target.value)}
-                  placeholder="Neuen Namen hinzufügen (z. B. Max Mustermann)..."
+                  placeholder="Neue Person hinzufügen (z. B. Max Mustermann -> max.mustermann@schuelerunion.at)..."
                   className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white focus:border-sky-500 focus:outline-none"
                 />
               </div>
@@ -1396,35 +1472,105 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-40 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer shrink-0"
               >
                 <Plus className="w-4 h-4 stroke-[2.5]" />
-                <span>Name hinzufügen</span>
+                <span>Person anlegen</span>
               </button>
             </form>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-72 overflow-y-auto pr-1 pt-1">
-              {activeAllowedMembers.map((member) => (
-                <div
-                  key={member}
-                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm text-slate-200"
-                >
-                  <span className="font-medium truncate">{member}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Soll „${member}“ wirklich von der Liste der berechtigten Personen entfernt werden?`
-                        )
-                      ) {
-                        handleRemoveAllowedMember(member);
-                      }
-                    }}
-                    className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/15 transition cursor-pointer shrink-0"
-                    title={`${member} entfernen`}
+            <div className="space-y-2 max-h-[440px] overflow-y-auto pr-1 pt-1">
+              {activeMemberAccounts.map((acc) => {
+                const draftPass =
+                  memberPasswordDrafts[acc.name] !== undefined
+                    ? memberPasswordDrafts[acc.name]
+                    : acc.password;
+                const isModified =
+                  memberPasswordDrafts[acc.name] !== undefined &&
+                  memberPasswordDrafts[acc.name].trim() !== acc.password;
+
+                return (
+                  <div
+                    key={acc.name}
+                    className="flex flex-col md:flex-row md:items-center justify-between gap-2.5 p-3 rounded-xl bg-slate-950 border border-slate-800 text-xs sm:text-sm"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              ))}
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-white truncate">{acc.name}</div>
+                      <div className="text-xs text-sky-400 font-mono break-all">
+                        {acc.username}
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                      <span className="text-[11px] text-slate-400 mr-1">Passwort:</span>
+                      <input
+                        type="text"
+                        value={draftPass}
+                        onChange={(e) =>
+                          setMemberPasswordDrafts((prev) => ({
+                            ...prev,
+                            [acc.name]: e.target.value,
+                          }))
+                        }
+                        className="w-32 sm:w-36 px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-700 focus:border-sky-500 focus:outline-none font-mono text-xs text-emerald-300 font-semibold"
+                        title="Passwort für diese Person (direkt einsehbar & änderbar)"
+                      />
+
+                      {isModified && (
+                        <button
+                          type="button"
+                          onClick={() => handleSaveMemberPassword(acc.name, draftPass)}
+                          className="px-2.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs flex items-center gap-1 cursor-pointer"
+                          title="Neues Passwort speichern"
+                        >
+                          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                          <span>Speichern</span>
+                        </button>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const rnd = generateRandomMemberPassword();
+                          handleSaveMemberPassword(acc.name, rnd);
+                        }}
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                        title="Neues zufälliges Passwort generieren"
+                      >
+                        <RefreshCw className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(
+                            `Benutzername: ${acc.username}\nPasswort: ${acc.password}`
+                          );
+                          showBanner(`Zugangsdaten von ${acc.name} in die Zwischenablage kopiert!`);
+                        }}
+                        className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-sky-300 transition cursor-pointer"
+                        title="Zugangsdaten dieser Person kopieren"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `Soll „${acc.name}“ (${acc.username}) wirklich von der Liste der berechtigten Personen entfernt werden?`
+                            )
+                          ) {
+                            handleRemoveAllowedMember(acc.name);
+                          }
+                        }}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-500/15 transition cursor-pointer"
+                        title={`${acc.name} entfernen`}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -1563,6 +1709,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     adminPassword: settings.adminPassword,
                     adminEmail: settings.adminEmail,
                     allowedMembers: activeAllowedMembers,
+                    memberAccounts: activeMemberAccounts,
+                    projectLists: settings.projectLists || [],
                   };
                   onUpdateSettings(safeSettings);
                   showBanner('Einstellungen und Datenbank-Verbindung gespeichert!');

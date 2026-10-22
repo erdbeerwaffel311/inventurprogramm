@@ -1,5 +1,12 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { AppSettings, CategoryInfo, InventoryItem, InventoryTransaction } from '../types';
+import {
+  AppSettings,
+  CategoryInfo,
+  InventoryItem,
+  InventoryTransaction,
+  KellerlisteProject,
+  MemberAccount,
+} from '../types';
 
 export const CONFIG_ROW_ID = '__keller_config__';
 
@@ -8,6 +15,8 @@ export interface CloudConfigPayload {
   adminPassword: string;
   adminEmail?: string;
   allowedMembers?: string[];
+  memberAccounts?: MemberAccount[];
+  projectLists?: KellerlisteProject[];
   twoFactorToken?: {
     code: string;
     email: string;
@@ -320,6 +329,8 @@ export async function pushConfigToSupabase(
     adminPassword: settings.adminPassword,
     adminEmail: settings.adminEmail || '',
     allowedMembers: settings.allowedMembers || [],
+    memberAccounts: settings.memberAccounts || [],
+    projectLists: settings.projectLists || [],
     categories: settings.categories,
     deletedCategoryIds,
     commonEvents: settings.commonEvents,
@@ -358,6 +369,8 @@ export async function pushToSupabase(
     adminPassword: settings.adminPassword,
     adminEmail: settings.adminEmail || '',
     allowedMembers: settings.allowedMembers || [],
+    memberAccounts: settings.memberAccounts || [],
+    projectLists: settings.projectLists || [],
     categories: settings.categories,
     commonEvents: settings.commonEvents,
     updatedAt: now,

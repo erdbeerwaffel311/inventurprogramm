@@ -91,6 +91,35 @@ export interface ParsedTextItem {
   confidence: 'high' | 'medium' | 'low';
 }
 
+export interface MemberAccount {
+  /** Vollständiger Name der Person (z. B. "Simon Märker" oder "Celil-Kaan Beler") */
+  name: string;
+  /** Login-Benutzername (z. B. "simon.maerker@schuelerunion.at" bzw. "celil.kaan.beler@schuelerunion.at") */
+  username: string;
+  /** Zufällig vergebenes oder vom Admin angepasstes Passwort */
+  password: string;
+}
+
+export interface KellerlisteItem {
+  itemId: string;
+  itemName: string;
+  amount: number;
+  unit: string;
+  checked?: boolean;
+}
+
+export interface KellerlisteProject {
+  id: string;
+  name: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  note?: string;
+  status: 'planned' | 'booked';
+  bookedTransactionId?: string;
+  items: KellerlisteItem[];
+}
+
 export interface AppSettings {
   clubName: string;
   adminPassword: string;
@@ -98,6 +127,10 @@ export interface AppSettings {
   adminEmail?: string;
   /** Liste der erlaubten Namen für Buchungen / Entnahmen (im Admin-Menü anpassbar) */
   allowedMembers: string[];
+  /** Zugangsdaten (Benutzername + Passwort) der berechtigten Personen für den App-Login */
+  memberAccounts: MemberAccount[];
+  /** Gespeicherte Kellerlisten / Projekte (ohne Bestandsabzug) */
+  projectLists: KellerlisteProject[];
   supabaseUrl: string;
   supabaseAnonKey: string;
   aiProvider: 'gemini' | 'openai';
@@ -105,5 +138,3 @@ export interface AppSettings {
   commonEvents: string[];
   categories: CategoryInfo[];
 }
-
-

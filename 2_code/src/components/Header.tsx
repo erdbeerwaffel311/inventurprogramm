@@ -2,6 +2,7 @@ import React from 'react';
 import {
   Package,
   ClipboardList,
+  ClipboardPen,
   ShoppingCart,
   ShieldCheck,
   Wifi,
@@ -10,9 +11,11 @@ import {
   Cloud,
   AlertTriangle,
   Smartphone,
+  LogOut,
+  User,
 } from 'lucide-react';
 
-export type ActiveTab = 'booking' | 'history' | 'shopping' | 'admin';
+export type ActiveTab = 'booking' | 'kellerliste' | 'history' | 'shopping' | 'admin';
 
 interface HeaderProps {
   clubName: string;
@@ -20,6 +23,9 @@ interface HeaderProps {
   setActiveTab: (tab: ActiveTab) => void;
   lowStockCount: number;
   openLoansCount: number;
+  projectListsCount: number;
+  currentUserName: string;
+  onLogout: () => void;
   isOnline: boolean;
   hasCloudConfig: boolean;
   unsyncedCount: number;
@@ -33,6 +39,9 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   lowStockCount,
   openLoansCount,
+  projectListsCount,
+  currentUserName,
+  onLogout,
   isOnline,
   hasCloudConfig,
   unsyncedCount,
@@ -46,21 +55,27 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="sticky top-0 z-30 bg-slate-900/95 backdrop-blur border-b border-slate-800 no-print">
       <div className="max-w-5xl mx-auto px-3 sm:px-6">
         {/* Top Row: Brand & Sync Status */}
-        <div className="flex items-center justify-between py-3">
-          <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-500 to-emerald-500 flex items-center justify-center shadow-lg shadow-sky-500/20">
-              <Package className="w-5 h-5 text-slate-950 stroke-[2.5]" />
+        <div className="flex items-center justify-between py-3 gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-11 h-11 rounded-xl bg-white p-1 flex items-center justify-center shadow-lg shrink-0">
+              <img
+                src="./su-logo.png"
+                alt="Schülerunion Vorarlberg"
+                className="w-full h-full object-contain"
+              />
             </div>
-            <div>
-              <h1 className="font-bold text-base sm:text-lg leading-tight text-white">
+            <div className="min-w-0">
+              <h1 className="font-bold text-base sm:text-lg leading-tight text-white truncate">
                 {clubName || 'Vereinskeller'}
               </h1>
-              <p className="text-xs text-slate-400">Bestand, Entnahme & Inventur</p>
+              <p className="text-xs text-slate-400 truncate">
+                Angemeldet: <strong className="text-sky-300">{currentUserName}</strong>
+              </p>
             </div>
           </div>
 
-          {/* Sync / Connectivity Badge & APK Download */}
-          <div className="flex items-center gap-2">
+          {/* Sync / Connectivity Badge, APK Download & Logout */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {!isInsideNativeApk && (
               <a
                 href="https://erdbeerwaffel311.github.io/inventurprogramm/Vereinskeller.apk"
@@ -69,8 +84,8 @@ export const Header: React.FC<HeaderProps> = ({
                 title="Android-App (.apk) direkt herunterladen und installieren"
               >
                 <Smartphone className="w-3.5 h-3.5 shrink-0" />
-                <span className="hidden sm:inline">Android .apk</span>
-                <span className="sm:hidden">.apk</span>
+                <span className="hidden md:inline">Android .apk</span>
+                <span className="md:hidden">.apk</span>
               </a>
             )}
             {!isOnline ? (
@@ -79,9 +94,8 @@ export const Header: React.FC<HeaderProps> = ({
                 title="Offline-Modus aktiv: Alle Buchungen werden auf dem Gerät gespeichert und automatisch synchronisiert, sobald wieder Empfang besteht."
               >
                 <WifiOff className="w-3.5 h-3.5 shrink-0" />
-                <span>
-                  Offline im Keller
-                  {unsyncedCount > 0 ? ` (${unsyncedCount} offen)` : ''}
+                <span className="hidden sm:inline">
+                  Offline{unsyncedCount > 0 ? ` (${unsyncedCount})` : ''}
                 </span>
               </div>
             ) : hasCloudConfig ? (
@@ -108,18 +122,29 @@ export const Header: React.FC<HeaderProps> = ({
                 title="Noch keine Cloud-Datenbank hinterlegt – Geräte-Sync im Admin-Bereich einrichten"
               >
                 <Cloud className="w-3.5 h-3.5 text-sky-400" />
-                <span className="hidden sm:inline">Lokaler Modus</span>
+                <span className="hidden sm:inline">Lokal</span>
                 <Wifi className="w-3 h-3 text-emerald-400 sm:hidden" />
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={onLogout}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-full bg-slate-800 hover:bg-rose-500/20 border border-slate-700 hover:border-rose-500/40 text-slate-300 hover:text-rose-300 text-xs font-medium transition cursor-pointer"
+              title={`Als ${currentUserName} abmelden / Benutzer wechseln`}
+            >
+              <User className="w-3.5 h-3.5 hidden sm:inline text-sky-400" />
+              <LogOut className="w-3.5 h-3.5 shrink-0" />
+              <span className="hidden sm:inline">Abmelden</span>
+            </button>
           </div>
         </div>
 
         {/* Navigation Tabs */}
-        <nav className="grid grid-cols-4 gap-1 pb-2">
+        <nav className="grid grid-cols-5 gap-1 pb-2">
           <button
             onClick={() => setActiveTab('booking')}
-            className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-2 rounded-xl text-xs sm:text-sm font-medium transition cursor-pointer ${
+            className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-1.5 rounded-xl text-[11px] sm:text-sm font-medium transition cursor-pointer ${
               activeTab === 'booking'
                 ? 'bg-sky-500 text-slate-950 font-semibold shadow-md shadow-sky-500/20'
                 : 'text-slate-300 hover:bg-slate-800/80'
@@ -130,8 +155,31 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           <button
+            onClick={() => setActiveTab('kellerliste')}
+            className={`relative flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-1.5 rounded-xl text-[11px] sm:text-sm font-medium transition cursor-pointer ${
+              activeTab === 'kellerliste'
+                ? 'bg-sky-500 text-slate-950 font-semibold shadow-md shadow-sky-500/20'
+                : 'text-slate-300 hover:bg-slate-800/80'
+            }`}
+          >
+            <ClipboardPen className="w-4 h-4" />
+            <span>Kellerliste</span>
+            {projectListsCount > 0 && (
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-bold ${
+                  activeTab === 'kellerliste'
+                    ? 'bg-slate-950 text-sky-300'
+                    : 'bg-sky-500/20 text-sky-300 border border-sky-500/40'
+                }`}
+              >
+                {projectListsCount}
+              </span>
+            )}
+          </button>
+
+          <button
             onClick={() => setActiveTab('history')}
-            className={`relative flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-2 rounded-xl text-xs sm:text-sm font-medium transition cursor-pointer ${
+            className={`relative flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-1.5 rounded-xl text-[11px] sm:text-sm font-medium transition cursor-pointer ${
               activeTab === 'history'
                 ? 'bg-sky-500 text-slate-950 font-semibold shadow-md shadow-sky-500/20'
                 : 'text-slate-300 hover:bg-slate-800/80'
@@ -154,7 +202,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           <button
             onClick={() => setActiveTab('shopping')}
-            className={`relative flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-2 rounded-xl text-xs sm:text-sm font-medium transition cursor-pointer ${
+            className={`relative flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-1.5 rounded-xl text-[11px] sm:text-sm font-medium transition cursor-pointer ${
               activeTab === 'shopping'
                 ? 'bg-sky-500 text-slate-950 font-semibold shadow-md shadow-sky-500/20'
                 : 'text-slate-300 hover:bg-slate-800/80'
@@ -178,7 +226,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           <button
             onClick={() => setActiveTab('admin')}
-            className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-2 rounded-xl text-xs sm:text-sm font-medium transition cursor-pointer ${
+            className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-1.5 rounded-xl text-[11px] sm:text-sm font-medium transition cursor-pointer ${
               activeTab === 'admin'
                 ? 'bg-sky-500 text-slate-950 font-semibold shadow-md shadow-sky-500/20'
                 : 'text-slate-300 hover:bg-slate-800/80'

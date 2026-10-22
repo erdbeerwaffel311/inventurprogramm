@@ -6,15 +6,19 @@ import {
   CategoryInfo,
   InventoryItem,
   InventoryTransaction,
+  KellerlisteProject,
+  MemberAccount,
   TransactionLineItem,
 } from './types';
 import {
   DEFAULT_ALLOWED_MEMBERS,
   DEFAULT_ITEMS,
+  DEFAULT_MEMBER_ACCOUNTS,
   DEFAULT_SETTINGS,
   DEFAULT_TRANSACTIONS,
   LEGACY_DEMO_ITEM_IDS,
   LEGACY_DEMO_TX_IDS,
+  reconcileMemberAccounts,
 } from './data/defaultData';
 import { roundStock, toPrimaryUnitQuantity } from './utils/units';
 import {
@@ -28,14 +32,17 @@ import {
 } from './utils/supabaseSync';
 import { ActiveTab, Header } from './components/Header';
 import { OpenBookingView } from './components/OpenBookingView';
+import { KellerlisteView } from './components/KellerlisteView';
 import { HistoryLogView } from './components/HistoryLogView';
 import { ShoppingListView } from './components/ShoppingListView';
 import { AdminView } from './components/AdminView';
+import { MemberLoginView } from './components/MemberLoginView';
 
 const STORAGE_KEYS = {
   ITEMS: 'vk_inventory_items_v2',
   TRANSACTIONS: 'vk_inventory_transactions_v2',
   SETTINGS: 'vk_app_settings_v1',
+  LOGGED_IN_MEMBER: 'vk_logged_in_member_v1',
 };
 
 export const App: React.FC = () => {
@@ -53,6 +60,13 @@ export const App: React.FC = () => {
       if (!parsed.supabaseAnonKey) parsed.supabaseAnonKey = DEFAULT_SETTINGS.supabaseAnonKey;
       if (!Array.isArray(parsed.allowedMembers) || parsed.allowedMembers.length === 0) {
         parsed.allowedMembers = DEFAULT_ALLOWED_MEMBERS;
+      }
+      parsed.memberAccounts = reconcileMemberAccounts(
+        parsed.allowedMembers,
+        parsed.memberAccounts || DEFAULT_MEMBER_ACCOUNTS
+      );
+      if (!Array.isArray(parsed.projectLists)) {
+        parsed.projectLists = [];
       }
 
       // Prüfe QR-Code / Einladungslink-Parameter (?dbUrl=...&dbKey=...&club=...)
@@ -80,6 +94,23 @@ export const App: React.FC = () => {
       return parsed;
     } catch {
       return DEFAULT_SETTINGS;
+    }
+  });
+
+  const activeMemberAccounts = useMemo(
+    () => reconcileMemberAccounts(settings.allowedMembers, settings.memberAccounts),
+    [settings.allowedMembers, settings.memberAccounts]
+  );
+
+  const [loggedInMember, setLoggedInMember] = useState<MemberAccount | null>(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.LOGGED_IN_MEMBER);
+      if (!raw) return null;
+      const savedAcc = JSON.parse(raw) as MemberAccount;
+      if (!savedAcc?.username) return null;
+      return savedAcc;
+    } catch {
+      return null;
     }
   });
 
@@ -248,6 +279,39 @@ export const App: React.FC = () => {
               }
             }
 
+            const nextAllowedMembers = remote.config.allowedMembers?.length
+              ? remote.config.allowedMembers
+              : currentSettings.allowedMembers || DEFAULT_ALLOWED_MEMBERS;
+            const nextMemberAccounts = reconcileMemberAccounts(
+              nextAllowedMembers,
+              remote.config.memberAccounts?.length
+                ? remote.config.memberAccounts
+                : currentSettings.memberAccounts || DEFAULT_MEMBER_ACCOUNTS
+            );
+
+            // Merge projectLists from cloud + local (newest updatedAt wins)
+            const remoteProjects = Array.isArray(remote.config.projectLists)
+              ? remote.config.projectLists
+              : [];
+            const localProjects = Array.isArray(currentSettings.projectLists)
+              ? currentSettings.projectLists
+              : [];
+            const mergedProjectsMap = new Map<string, KellerlisteProject>();
+            for (const p of remoteProjects) {
+              mergedProjectsMap.set(p.id, p);
+            }
+            for (const lp of localProjects) {
+              const existing = mergedProjectsMap.get(lp.id);
+              if (!existing || new Date(lp.updatedAt).getTime() > new Date(existing.updatedAt).getTime()) {
+                if (!remote.config.projectLists) {
+                  mergedProjectsMap.set(lp.id, lp);
+                }
+              }
+            }
+            const nextProjectLists = remote.config.projectLists !== undefined
+              ? remoteProjects
+              : Array.from(mergedProjectsMap.values());
+
             const updatedSettings: AppSettings = {
               ...currentSettings,
               clubName: remote.config.clubName || currentSettings.clubName,
@@ -256,9 +320,9 @@ export const App: React.FC = () => {
                 remote.config.adminEmail !== undefined
                   ? remote.config.adminEmail
                   : currentSettings.adminEmail,
-              allowedMembers: remote.config.allowedMembers?.length
-                ? remote.config.allowedMembers
-                : currentSettings.allowedMembers || DEFAULT_ALLOWED_MEMBERS,
+              allowedMembers: nextAllowedMembers,
+              memberAccounts: nextMemberAccounts,
+              projectLists: nextProjectLists,
               commonEvents: remote.config.commonEvents?.length
                 ? remote.config.commonEvents
                 : currentSettings.commonEvents,
@@ -267,16 +331,12 @@ export const App: React.FC = () => {
 
             setSettings(updatedSettings);
 
-            if (localHadNewCustomCats) {
+            if (localHadNewCustomCats || !remote.config.memberAccounts?.length) {
               await pushConfigToSupabase(updatedSettings, remote.config.deletedCategoryIds || []);
             }
           } else {
             // Noch kein __keller_config__ in Supabase vorhanden:
-            // Falls dieses Gerät eigene Kategorien hat, sofort in die Cloud hochladen!
-            const hasLocalCustomCats = localCats.some((c) => !defaultCatIds.has(c.id));
-            if (hasLocalCustomCats) {
-              await pushConfigToSupabase(currentSettings);
-            }
+            await pushConfigToSupabase(currentSettings);
           }
         }
       } catch {
@@ -642,6 +702,17 @@ export const App: React.FC = () => {
     }
   }
 
+  function handleUpdateProjectLists(nextLists: KellerlisteProject[]) {
+    const nextSettings: AppSettings = {
+      ...settings,
+      projectLists: nextLists,
+    };
+    setSettings(nextSettings);
+    if (hasCloudConfig && navigator.onLine) {
+      pushConfigToSupabase(nextSettings).catch(() => {});
+    }
+  }
+
   const lowStockCount = useMemo(
     () => items.filter((i) => i.quantity < i.minStock).length,
     [items]
@@ -654,6 +725,28 @@ export const App: React.FC = () => {
     [transactions]
   );
 
+  const projectListsCount = useMemo(
+    () => (settings.projectLists || []).length,
+    [settings.projectLists]
+  );
+
+  // Vor dem Eintritt in das Programm muss man sich mit vorname.nachname@schuelerunion.at + Passwort anmelden
+  if (!loggedInMember && !initial2FAVerified) {
+    return (
+      <MemberLoginView
+        clubName={settings.clubName}
+        memberAccounts={activeMemberAccounts}
+        onLoginSuccess={(account) => {
+          setLoggedInMember(account);
+          localStorage.setItem(STORAGE_KEYS.LOGGED_IN_MEMBER, JSON.stringify(account));
+          localStorage.setItem('vk_last_person_name', account.name);
+        }}
+      />
+    );
+  }
+
+  const currentUserName = loggedInMember?.name || 'Admin';
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
       <Header
@@ -662,11 +755,18 @@ export const App: React.FC = () => {
         setActiveTab={setActiveTab}
         lowStockCount={lowStockCount}
         openLoansCount={openLoansCount}
+        projectListsCount={projectListsCount}
         isOnline={isOnline}
         hasCloudConfig={hasCloudConfig}
         unsyncedCount={unsyncedCount}
         isSyncing={isSyncing}
         onManualSync={() => syncWithCloud()}
+        currentUserName={currentUserName}
+        onLogout={() => {
+          setLoggedInMember(null);
+          localStorage.removeItem(STORAGE_KEYS.LOGGED_IN_MEMBER);
+          setIsAdminUnlocked(false);
+        }}
       />
 
       <main className="flex-1 max-w-5xl w-full mx-auto px-3 sm:px-6 py-5">
@@ -675,9 +775,20 @@ export const App: React.FC = () => {
             items={items}
             transactions={transactions}
             settings={settings}
+            currentUserName={currentUserName}
             selectedReturnTxId={selectedReturnTxId}
             onClearSelectedReturnTx={() => setSelectedReturnTxId(null)}
             onExecuteBooking={handleExecuteBooking}
+          />
+        )}
+
+        {activeTab === 'kellerliste' && (
+          <KellerlisteView
+            items={items}
+            settings={settings}
+            currentUserName={currentUserName}
+            onUpdateProjectLists={handleUpdateProjectLists}
+            onExecuteBookingFromList={handleExecuteBooking}
           />
         )}
 
