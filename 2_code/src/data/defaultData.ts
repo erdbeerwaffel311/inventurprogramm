@@ -65,7 +65,8 @@ export const DEFAULT_ALLOWED_MEMBERS: string[] = [
 /**
  * Erzeugt aus einem Vor- und Nachnamen den Benutzernamen nach dem Schema:
  * vorname.nachname@schuelerunion.at
- * (Bei Bindestrich-Namen oder Doppelnamen: vorname1.vorname2.nachname@schuelerunion.at)
+ * (Bei Doppelnamen / Bindestrich im Vor- oder Nachnamen:
+ *  vorname1-vorname2.nachname@schuelerunion.at bzw. vorname.nachname1-nachname2@schuelerunion.at)
  */
 export function buildMemberUsername(fullName: string): string {
   const cleaned = fullName
@@ -78,12 +79,21 @@ export function buildMemberUsername(fullName: string): string {
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
 
-  const parts = cleaned
-    .split(/[\s.-]+/)
-    .map((p) => p.replace(/[^a-z0-9]/g, ''))
+  const words = cleaned
+    .split(/\s+/)
+    .map((w) => w.replace(/[^a-z0-9-]+/g, '').replace(/-+/g, '-').replace(/^-|-$/g, ''))
     .filter(Boolean);
 
-  return `${parts.join('.')}@schuelerunion.at`;
+  if (words.length === 0) {
+    return 'mitglied@schuelerunion.at';
+  }
+  if (words.length === 1) {
+    return `${words[0]}@schuelerunion.at`;
+  }
+
+  const lastName = words[words.length - 1];
+  const firstNames = words.slice(0, -1).join('-');
+  return `${firstNames}.${lastName}@schuelerunion.at`;
 }
 
 /**
@@ -104,57 +114,61 @@ export function normalizeUsernameForComparison(rawUsername: string): string {
 }
 
 /**
- * Erzeugt ein gut lesbares zufälliges 8-stelliges Passwort für neu angelegte Personen.
+ * Erzeugt ein gut lesbares zufälliges Passwort für neu angelegte Personen.
  */
 export function generateRandomMemberPassword(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
-  let result = 'SU-';
-  for (let i = 0; i < 6; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  let part1 = '';
+  let part2 = '';
+  for (let i = 0; i < 4; i++) {
+    part1 += chars.charAt(Math.floor(Math.random() * chars.length));
   }
-  return result;
+  for (let i = 0; i < 2; i++) {
+    part2 += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return `SU-${part1}-${part2}`;
 }
 
 const INITIAL_PASSWORDS_BY_NAME: Record<string, string> = {
-  'Simon Märker': 'SU-8kM4p2',
-  'Aaron Hammerer': 'SU-3vR9x7',
-  'Amina Amann': 'SU-6tN2q5',
-  'Angelina Fitsch': 'SU-9wL5b8',
-  'Anton Loss': 'SU-4hJ7d3',
-  'Celil-Kaan Beler': 'SU-7pF3m9',
-  'Chiara Forcher': 'SU-2cW8k4',
-  'Elias Mantler': 'SU-5zY6n2',
-  'Emil Schmalfuss': 'SU-9bQ4v7',
-  'Fabian Stauss': 'SU-3mX8r5',
-  'Hannah Grabher': 'SU-6dK2w9',
-  'Ian Hörburger': 'SU-8nP5t4',
-  'Ismail Öztoprak': 'SU-4rG9j6',
-  'Josefine Müller': 'SU-7vH3q8',
-  'Jeramis Dengel': 'SU-2kT6m5',
-  'Juliana Moosbrugger': 'SU-5wB9x3',
-  'Kaspar Riedmann': 'SU-8jL4n7',
-  'Katharina Nigg': 'SU-3qC7p2',
-  'Leon Schwendinger': 'SU-6fR5v9',
-  'Elisabeth Himmer': 'SU-9mD2k6',
-  'Liljana Walser': 'SU-4xN8t3',
-  'Marian Kolanovic': 'SU-7gP6w4',
-  'Paulus Cukrowicz': 'SU-2vJ9r8',
-  'Rania Moosbrugger': 'SU-5tK3m7',
-  'Nick Klein': 'SU-8bW4q6',
-  'Sophia-Maria Thoma': 'SU-3nL7x2',
-  'Emma Holzer': 'SU-6pG5d9',
-  'Elias Mathis': 'SU-9kR4v3',
+  'Simon Märker': 'SU-K7m4-9X',
+  'Aaron Hammerer': 'SU-P3n8-2V',
+  'Amina Amann': 'SU-R9t2-6B',
+  'Angelina Fitsch': 'SU-W4q7-5N',
+  'Anton Loss': 'SU-L8k3-4M',
+  'Celil-Kaan Beler': 'SU-H5v9-7C',
+  'Chiara Forcher': 'SU-D2j6-8F',
+  'Elias Mantler': 'SU-Z6x3-9T',
+  'Emil Schmalfuss': 'SU-B9w4-2G',
+  'Fabian Stauss': 'SU-M3p7-6R',
+  'Hannah Grabher': 'SU-T8c5-3K',
+  'Ian Hörburger': 'SU-V4n9-5L',
+  'Ismail Öztoprak': 'SU-Q7b2-8H',
+  'Josefine Müller': 'SU-F6m8-4P',
+  'Jeramis Dengel': 'SU-N2r5-9W',
+  'Juliana Moosbrugger': 'SU-X5t3-7J',
+  'Kaspar Riedmann': 'SU-C8g4-2D',
+  'Katharina Nigg': 'SU-J3k9-6S',
+  'Leon Schwendinger': 'SU-G7p2-5V',
+  'Elisabeth Himmer': 'SU-S4v8-3Q',
+  'Liljana Walser': 'SU-Y9d6-4Z',
+  'Marian Kolanovic': 'SU-K2h7-8B',
+  'Paulus Cukrowicz': 'SU-W6f3-5M',
+  'Rania Moosbrugger': 'SU-P8q4-7N',
+  'Nick Klein': 'SU-R3z9-2T',
+  'Sophia-Maria Thoma': 'SU-L5x7-6K',
+  'Emma Holzer': 'SU-H4c8-3F',
+  'Elias Mathis': 'SU-T9n2-5G',
 };
 
 export const DEFAULT_MEMBER_ACCOUNTS: MemberAccount[] = DEFAULT_ALLOWED_MEMBERS.map((name) => ({
   name,
   username: buildMemberUsername(name),
-  password: INITIAL_PASSWORDS_BY_NAME[name] || 'SU-4kM8p2',
+  password: INITIAL_PASSWORDS_BY_NAME[name] || 'SU-K7m4-9X',
 }));
 
 /**
  * Stellt sicher, dass für jeden Namen in `allowedMembers` ein vollständiger `MemberAccount`
- * (mit Benutzername und Passwort) existiert.
+ * (mit Benutzername nach Schema vorname1-vorname2.nachname@schuelerunion.at und Passwort) existiert.
  */
 export function reconcileMemberAccounts(
   allowedMembers: string[],
@@ -174,7 +188,7 @@ export function reconcileMemberAccounts(
       if (acc && acc.name) {
         accountMap.set(acc.name.trim().toLowerCase(), {
           name: acc.name.trim(),
-          username: acc.username?.trim() || buildMemberUsername(acc.name),
+          username: buildMemberUsername(acc.name),
           password: acc.password?.trim() || generateRandomMemberPassword(),
         });
       }
@@ -187,7 +201,7 @@ export function reconcileMemberAccounts(
     if (existing) {
       return {
         name: cleanName,
-        username: existing.username || buildMemberUsername(cleanName),
+        username: buildMemberUsername(cleanName),
         password: existing.password || INITIAL_PASSWORDS_BY_NAME[cleanName] || generateRandomMemberPassword(),
       };
     }

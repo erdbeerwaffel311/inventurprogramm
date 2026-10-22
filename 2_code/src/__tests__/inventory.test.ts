@@ -214,13 +214,13 @@ describe('CSV / Excel Export & Import für die Erstinventur', () => {
 });
 
 describe('Mitglieder-Login & Benutzernamen-Format (@schuelerunion.at)', () => {
-  it('erzeugt vorname.nachname@schuelerunion.at inkl. Bindestrich-Auflösung und Doppel-Nachnamen', () => {
+  it('erzeugt vorname.nachname@schuelerunion.at bzw. vorname1-vorname2.nachname@schuelerunion.at bei Doppelnamen', () => {
     expect(buildMemberUsername('Elias Mantler')).toBe('elias.mantler@schuelerunion.at');
-    expect(buildMemberUsername('Celil-Kaan Beler')).toBe('celil.kaan.beler@schuelerunion.at');
-    expect(buildMemberUsername('Sophia-Maria Thoma')).toBe('sophia.maria.thoma@schuelerunion.at');
+    expect(buildMemberUsername('Celil-Kaan Beler')).toBe('celil-kaan.beler@schuelerunion.at');
+    expect(buildMemberUsername('Sophia-Maria Thoma')).toBe('sophia-maria.thoma@schuelerunion.at');
     expect(buildMemberUsername('Simon Märker')).toBe('simon.maerker@schuelerunion.at');
     expect(buildMemberUsername('Max Müller-Lüdenscheidt')).toBe(
-      'max.mueller.luedenscheidt@schuelerunion.at'
+      'max.mueller-luedenscheidt@schuelerunion.at'
     );
   });
 
