@@ -104,10 +104,11 @@ export const AdminView: React.FC<AdminViewProps> = ({
   isSyncing,
 }) => {
   const activeCategories = settings.categories?.length ? settings.categories : CATEGORIES;
-  const activeAllowedMembers =
-    Array.isArray(settings.allowedMembers) && settings.allowedMembers.length > 0
+  const activeAllowedMembers = [
+    ...(Array.isArray(settings.allowedMembers) && settings.allowedMembers.length > 0
       ? settings.allowedMembers
-      : DEFAULT_ALLOWED_MEMBERS;
+      : DEFAULT_ALLOWED_MEMBERS),
+  ].sort((a, b) => a.localeCompare(b, 'de'));
   const activeMemberAccounts: MemberAccount[] = reconcileMemberAccounts(
     activeAllowedMembers,
     settings.memberAccounts
@@ -224,6 +225,8 @@ export const AdminView: React.FC<AdminViewProps> = ({
     }
 
     if (addedCount > 0) {
+      nextList.sort((a, b) => a.localeCompare(b, 'de'));
+      nextAccounts.sort((a, b) => a.name.localeCompare(b.name, 'de'));
       const nextSettings: AppSettings = {
         ...settings,
         allowedMembers: nextList,

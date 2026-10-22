@@ -32,7 +32,6 @@ export const CATEGORIES: CategoryInfo[] = [
 ];
 
 export const DEFAULT_ALLOWED_MEMBERS: string[] = [
-  'Simon Märker',
   'Aaron Hammerer',
   'Amina Amann',
   'Angelina Fitsch',
@@ -40,26 +39,27 @@ export const DEFAULT_ALLOWED_MEMBERS: string[] = [
   'Celil-Kaan Beler',
   'Chiara Forcher',
   'Elias Mantler',
+  'Elias Mathis',
+  'Elisabeth Himmer',
   'Emil Schmalfuss',
+  'Emma Holzer',
   'Fabian Stauss',
   'Hannah Grabher',
   'Ian Hörburger',
   'Ismail Öztoprak',
-  'Josefine Müller',
   'Jeramis Dengel',
+  'Josefine Müller',
   'Juliana Moosbrugger',
   'Kaspar Riedmann',
   'Katharina Nigg',
   'Leon Schwendinger',
-  'Elisabeth Himmer',
   'Liljana Walser',
   'Marian Kolanovic',
+  'Nick Klein',
   'Paulus Cukrowicz',
   'Rania Moosbrugger',
-  'Nick Klein',
+  'Simon Märker',
   'Sophia-Maria Thoma',
-  'Emma Holzer',
-  'Elias Mathis',
 ];
 
 /**
@@ -130,7 +130,6 @@ export function generateRandomMemberPassword(): string {
 }
 
 const INITIAL_PASSWORDS_BY_NAME: Record<string, string> = {
-  'Simon Märker': 'SU-K7m4-9X',
   'Aaron Hammerer': 'SU-P3n8-2V',
   'Amina Amann': 'SU-R9t2-6B',
   'Angelina Fitsch': 'SU-W4q7-5N',
@@ -138,26 +137,27 @@ const INITIAL_PASSWORDS_BY_NAME: Record<string, string> = {
   'Celil-Kaan Beler': 'SU-H5v9-7C',
   'Chiara Forcher': 'SU-D2j6-8F',
   'Elias Mantler': 'SU-Z6x3-9T',
+  'Elias Mathis': 'SU-T9n2-5G',
+  'Elisabeth Himmer': 'SU-S4v8-3Q',
   'Emil Schmalfuss': 'SU-B9w4-2G',
+  'Emma Holzer': 'SU-H4c8-3F',
   'Fabian Stauss': 'SU-M3p7-6R',
   'Hannah Grabher': 'SU-T8c5-3K',
   'Ian Hörburger': 'SU-V4n9-5L',
   'Ismail Öztoprak': 'SU-Q7b2-8H',
-  'Josefine Müller': 'SU-F6m8-4P',
   'Jeramis Dengel': 'SU-N2r5-9W',
+  'Josefine Müller': 'SU-F6m8-4P',
   'Juliana Moosbrugger': 'SU-X5t3-7J',
   'Kaspar Riedmann': 'SU-C8g4-2D',
   'Katharina Nigg': 'SU-J3k9-6S',
   'Leon Schwendinger': 'SU-G7p2-5V',
-  'Elisabeth Himmer': 'SU-S4v8-3Q',
   'Liljana Walser': 'SU-Y9d6-4Z',
   'Marian Kolanovic': 'SU-K2h7-8B',
+  'Nick Klein': 'SU-R3z9-2T',
   'Paulus Cukrowicz': 'SU-W6f3-5M',
   'Rania Moosbrugger': 'SU-P8q4-7N',
-  'Nick Klein': 'SU-R3z9-2T',
+  'Simon Märker': 'SU-K7m4-9X',
   'Sophia-Maria Thoma': 'SU-L5x7-6K',
-  'Emma Holzer': 'SU-H4c8-3F',
-  'Elias Mathis': 'SU-T9n2-5G',
 };
 
 export const DEFAULT_MEMBER_ACCOUNTS: MemberAccount[] = DEFAULT_ALLOWED_MEMBERS.map((name) => ({
@@ -168,7 +168,8 @@ export const DEFAULT_MEMBER_ACCOUNTS: MemberAccount[] = DEFAULT_ALLOWED_MEMBERS.
 
 /**
  * Stellt sicher, dass für jeden Namen in `allowedMembers` ein vollständiger `MemberAccount`
- * (mit Benutzername nach Schema vorname1-vorname2.nachname@schuelerunion.at und Passwort) existiert.
+ * (mit Benutzername nach Schema vorname1-vorname2.nachname@schuelerunion.at und Passwort) existiert
+ * und gibt die Liste alphabetisch sortiert zurück.
  */
 export function reconcileMemberAccounts(
   allowedMembers: string[],
@@ -195,22 +196,28 @@ export function reconcileMemberAccounts(
     }
   }
 
-  return names.map((rawName) => {
-    const cleanName = rawName.trim();
-    const existing = accountMap.get(cleanName.toLowerCase());
-    if (existing) {
+  return names
+    .map((rawName) => {
+      const cleanName = rawName.trim();
+      const existing = accountMap.get(cleanName.toLowerCase());
+      if (existing) {
+        return {
+          name: cleanName,
+          username: buildMemberUsername(cleanName),
+          password:
+            existing.password ||
+            INITIAL_PASSWORDS_BY_NAME[cleanName] ||
+            generateRandomMemberPassword(),
+        };
+      }
       return {
         name: cleanName,
         username: buildMemberUsername(cleanName),
-        password: existing.password || INITIAL_PASSWORDS_BY_NAME[cleanName] || generateRandomMemberPassword(),
+        password:
+          INITIAL_PASSWORDS_BY_NAME[cleanName] || generateRandomMemberPassword(),
       };
-    }
-    return {
-      name: cleanName,
-      username: buildMemberUsername(cleanName),
-      password: INITIAL_PASSWORDS_BY_NAME[cleanName] || generateRandomMemberPassword(),
-    };
-  });
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, 'de'));
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
