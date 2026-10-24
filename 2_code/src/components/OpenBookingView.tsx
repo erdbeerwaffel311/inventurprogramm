@@ -1552,15 +1552,10 @@ export const OpenBookingView: React.FC<OpenBookingViewProps> = ({
                       type="text"
                       value={eventName}
                       onChange={(e) => setEventName(e.target.value)}
-                      list="common-events-list"
+                      autoComplete="off"
                       placeholder="Zweck / Event (z.B. Sommerfest)"
                       className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs sm:text-sm text-white placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
                     />
-                    <datalist id="common-events-list">
-                      {settings.commonEvents.map((ev) => (
-                        <option key={ev} value={ev} />
-                      ))}
-                    </datalist>
                   </div>
                 </div>
               </div>
