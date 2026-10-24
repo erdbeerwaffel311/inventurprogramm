@@ -123,35 +123,107 @@ export const App: React.FC = () => {
       window.location.hash.includes('access_token=');
     if (!has2FAParam) return;
 
+    // 1. Expliziter SiP-Parameter: Sofort zur SiP-Webseite weiterleiten
+    if (
+      searchParams.get('source') === 'sip' ||
+      searchParams.get('app') === 'sip' ||
+      window.location.hash.includes('source=sip') ||
+      window.location.hash.includes('app=sip')
+    ) {
+      window.location.replace(
+        `https://sip.schuelerunion-vorarlberg.at/${window.location.search}${window.location.hash}`
+      );
+      return;
+    }
+
     const client = getSupabaseClient(settings);
     if (!client) return;
 
-    if (
-      (searchParams.get('2fa_code') ||
-        searchParams.get('code') ||
-        searchParams.get('token') ||
-        window.location.hash.includes('access_token=')) &&
-      settings.adminEmail
-    ) {
-      verifyAdmin2FACode(settings, settings.adminEmail, window.location.href)
-        .then((ok) => {
-          if (ok) {
-            setInitial2FAVerified(true);
-            setIsAdminUnlocked(true);
-            setActiveTab('admin');
-            window.history.replaceState({}, document.title, window.location.pathname);
-          }
-        })
-        .catch(() => {});
-    }
+    // 2. Intelligente Trennung: Prüfe, ob in der Datenbank ein frischer 2FA-Request für SiP vorliegt
+    async function handleIncoming2FA() {
+      try {
+        const { data } = await client!
+          .from('keller_items')
+          .select('id, payload')
+          .in('id', ['__app_config__', '__sip_users_config__']);
 
-    const { data: sub } = client.auth.onAuthStateChange((event, session) => {
+        const sipConfig = data?.find((d) => d.id === '__sip_users_config__')?.payload;
+        const appConfig = data?.find((d) => d.id === '__app_config__')?.payload;
+
+        const now = Date.now();
+        const sipExp = sipConfig?.twoFactorToken?.expiresAt
+          ? new Date(sipConfig.twoFactorToken.expiresAt).getTime()
+          : 0;
+        const appExp = appConfig?.twoFactorToken?.expiresAt
+          ? new Date(appConfig.twoFactorToken.expiresAt).getTime()
+          : 0;
+
+        // Falls SiP einen aktiveren/neueren 2FA-Request hat als das Inventurprogramm, leite direkt zu SiP weiter
+        if (sipExp > now && sipExp > appExp) {
+          window.location.replace(
+            `https://sip.schuelerunion-vorarlberg.at/${window.location.search}${window.location.hash}`
+          );
+          return;
+        }
+
+        // Andernfalls: Normal für Inventurprogramm verarbeiten
+        if (
+          (searchParams.get('2fa_code') ||
+            searchParams.get('code') ||
+            searchParams.get('token') ||
+            window.location.hash.includes('access_token=')) &&
+          settings.adminEmail
+        ) {
+          verifyAdmin2FACode(settings, settings.adminEmail, window.location.href)
+            .then((ok) => {
+              if (ok) {
+                setInitial2FAVerified(true);
+                setIsAdminUnlocked(true);
+                setActiveTab('admin');
+                window.history.replaceState({}, document.title, window.location.pathname);
+              }
+            })
+            .catch(() => {});
+        }
+      } catch {}
+    }
+    handleIncoming2FA();
+
+    const { data: sub } = client.auth.onAuthStateChange(async (event, session) => {
       if (
         (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') &&
         session?.user?.email &&
         (!settings.adminEmail ||
           session.user.email.toLowerCase() === settings.adminEmail.trim().toLowerCase())
       ) {
+        if (
+          searchParams.get('source') === 'sip' ||
+          searchParams.get('app') === 'sip' ||
+          window.location.hash.includes('source=sip')
+        ) {
+          window.location.replace(
+            `https://sip.schuelerunion-vorarlberg.at/${window.location.search}${window.location.hash}`
+          );
+          return;
+        }
+
+        try {
+          const { data } = await client!
+            .from('keller_items')
+            .select('id, payload')
+            .eq('id', '__sip_users_config__')
+            .maybeSingle();
+          const sipExp = data?.payload?.twoFactorToken?.expiresAt
+            ? new Date(data.payload.twoFactorToken.expiresAt).getTime()
+            : 0;
+          if (sipExp > Date.now()) {
+            window.location.replace(
+              `https://sip.schuelerunion-vorarlberg.at/${window.location.search}${window.location.hash}`
+            );
+            return;
+          }
+        } catch {}
+
         setInitial2FAVerified(true);
         setIsAdminUnlocked(true);
         setActiveTab('admin');
