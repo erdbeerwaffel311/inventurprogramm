@@ -178,7 +178,9 @@ export const App: React.FC = () => {
       localStorage.removeItem('vk_inventory_items_v1');
       const saved = localStorage.getItem(STORAGE_KEYS.ITEMS);
       const parsed: InventoryItem[] = saved ? JSON.parse(saved) : DEFAULT_ITEMS;
-      return parsed.filter((i) => !LEGACY_DEMO_ITEM_IDS.has(i.id));
+      return parsed.filter(
+        (i) => i && typeof i.id === 'string' && !i.id.startsWith('__') && !LEGACY_DEMO_ITEM_IDS.has(i.id)
+      );
     } catch {
       return DEFAULT_ITEMS;
     }
@@ -242,7 +244,7 @@ export const App: React.FC = () => {
         const remote = await pullFromSupabase(currentSettings);
         if (remote) {
           const cleanRemoteItems = remote.items.filter(
-            (i) => !LEGACY_DEMO_ITEM_IDS.has(i.id)
+            (i) => i && typeof i.id === 'string' && !i.id.startsWith('__') && !LEGACY_DEMO_ITEM_IDS.has(i.id)
           );
           const cleanRemoteTxs = remote.transactions.filter(
             (t) => !LEGACY_DEMO_TX_IDS.has(t.id)

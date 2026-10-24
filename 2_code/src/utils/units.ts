@@ -19,7 +19,8 @@ const PLURAL_MAP: Record<string, string> = {
   Karton: 'Kartons',
 };
 
-export function pluralizeUnit(unit: string, count: number): string {
+export function pluralizeUnit(unit?: string | null, count: number = 1): string {
+  if (!unit || typeof unit !== 'string') return '';
   if (Math.abs(count - 1) < 0.0001) return unit;
   return PLURAL_MAP[unit] || (unit.endsWith('e') ? `${unit}n` : unit);
 }
@@ -34,20 +35,21 @@ export function formatGermanNumber(num: number): string {
  * Beispiel bei Kiste (20 Flaschen) und quantity = 4.5 -> "4 Kisten + 10 Flaschen"
  * Beispiel bei Rolle und quantity = 1.5 -> "1,5 Rollen"
  */
-export function formatStockDisplay(item: InventoryItem, quantity: number = item.quantity): {
+export function formatStockDisplay(item: InventoryItem, quantity: number = item?.quantity ?? 0): {
   primaryText: string;
   secondaryText?: string;
 } {
   const safeQty = roundStock(quantity);
+  const primaryUnit = item?.unit || 'Stück';
 
-  if (item.subUnit && item.subUnitsPerUnit && item.subUnitsPerUnit > 1) {
+  if (item?.subUnit && item?.subUnitsPerUnit && item.subUnitsPerUnit > 1) {
     const totalSubUnits = Math.round(safeQty * item.subUnitsPerUnit);
     const fullPrimary = Math.trunc(totalSubUnits / item.subUnitsPerUnit);
     const remainingSub = totalSubUnits % item.subUnitsPerUnit;
 
     if (remainingSub === 0) {
       return {
-        primaryText: `${fullPrimary} ${pluralizeUnit(item.unit, fullPrimary)}`,
+        primaryText: `${fullPrimary} ${pluralizeUnit(primaryUnit, fullPrimary)}`,
         secondaryText: `= ${totalSubUnits} ${pluralizeUnit(item.subUnit, totalSubUnits)}`,
       };
     }
@@ -55,18 +57,18 @@ export function formatStockDisplay(item: InventoryItem, quantity: number = item.
     if (fullPrimary === 0) {
       return {
         primaryText: `${remainingSub} ${pluralizeUnit(item.subUnit, remainingSub)}`,
-        secondaryText: `(${formatGermanNumber(safeQty)} ${pluralizeUnit(item.unit, safeQty)})`,
+        secondaryText: `(${formatGermanNumber(safeQty)} ${pluralizeUnit(primaryUnit, safeQty)})`,
       };
     }
 
     return {
-      primaryText: `${fullPrimary} ${pluralizeUnit(item.unit, fullPrimary)} + ${remainingSub} ${pluralizeUnit(item.subUnit, remainingSub)}`,
+      primaryText: `${fullPrimary} ${pluralizeUnit(primaryUnit, fullPrimary)} + ${remainingSub} ${pluralizeUnit(item.subUnit, remainingSub)}`,
       secondaryText: `Gesamt: ${totalSubUnits} ${pluralizeUnit(item.subUnit, totalSubUnits)}`,
     };
   }
 
   return {
-    primaryText: `${formatGermanNumber(safeQty)} ${pluralizeUnit(item.unit, safeQty)}`,
+    primaryText: `${formatGermanNumber(safeQty)} ${pluralizeUnit(primaryUnit, safeQty)}`,
   };
 }
 

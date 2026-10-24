@@ -304,8 +304,16 @@ export async function pullFromSupabase(settings: AppSettings): Promise<{
   for (const row of itemsRes.data || []) {
     if (row.id === CONFIG_ROW_ID) {
       config = row.payload as CloudConfigPayload;
-    } else if (row.payload) {
-      items.push(row.payload as InventoryItem);
+    } else if (typeof row.id === 'string' && row.id.startsWith('__')) {
+      // Systemzeilen wie __keller_config__ oder __sip_session_current__ nicht als Inventarartikel laden
+      continue;
+    } else if (row.payload && typeof row.payload === 'object' && row.payload.id && !String(row.payload.id).startsWith('__')) {
+      const p = row.payload as InventoryItem;
+      // Sicherstellen, dass Pflichtfelder vorhanden sind
+      items.push({
+        ...p,
+        unit: p.unit || 'Stück',
+      });
     }
   }
 
