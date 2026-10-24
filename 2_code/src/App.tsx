@@ -37,6 +37,7 @@ import { HistoryLogView } from './components/HistoryLogView';
 import { ShoppingListView } from './components/ShoppingListView';
 import { AdminView } from './components/AdminView';
 import { MemberLoginView } from './components/MemberLoginView';
+import { SipMainView } from './sip/components/SipMainView';
 
 const STORAGE_KEYS = {
   ITEMS: 'vk_inventory_items_v2',
@@ -46,7 +47,15 @@ const STORAGE_KEYS = {
 };
 
 export const App: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<ActiveTab>('booking');
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() => {
+    try {
+      const p = new URLSearchParams(window.location.search);
+      if (p.get('tab') === 'sip' || p.get('sip') === 'true') {
+        return 'sip';
+      }
+    } catch {}
+    return 'booking';
+  });
   const [isAdminUnlocked, setIsAdminUnlocked] = useState(false);
   const [initial2FAVerified, setInitial2FAVerified] = useState(false);
   const [selectedReturnTxId, setSelectedReturnTxId] = useState<string | null>(null);
@@ -834,6 +843,14 @@ export const App: React.FC = () => {
             }}
             onManualSync={() => syncWithCloud()}
             isSyncing={isSyncing}
+          />
+        )}
+
+        {activeTab === 'sip' && (
+          <SipMainView
+            settings={settings}
+            currentMember={loggedInMember}
+            isAdminUnlocked={isAdminUnlocked}
           />
         )}
       </main>

@@ -13,9 +13,10 @@ import {
   Smartphone,
   LogOut,
   User,
+  Gavel,
 } from 'lucide-react';
 
-export type ActiveTab = 'booking' | 'kellerliste' | 'history' | 'shopping' | 'admin';
+export type ActiveTab = 'booking' | 'kellerliste' | 'history' | 'shopping' | 'admin' | 'sip';
 
 interface HeaderProps {
   clubName: string;
@@ -141,7 +142,7 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         {/* Navigation Tabs */}
-        <nav className="grid grid-cols-5 gap-1 pb-2">
+        <nav className="grid grid-cols-3 sm:grid-cols-6 gap-1 pb-2">
           <button
             onClick={() => setActiveTab('booking')}
             className={`flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-1.5 rounded-xl text-[11px] sm:text-sm font-medium transition cursor-pointer ${
@@ -233,7 +234,19 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             <ShieldCheck className="w-4 h-4" />
-            <span>Admin / Inventur</span>
+            <span>Admin</span>
+          </button>
+
+          <button
+            onClick={() => setActiveTab('sip')}
+            className={`relative flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-2 py-2 px-1.5 rounded-xl text-[11px] sm:text-sm font-medium transition cursor-pointer ${
+              activeTab === 'sip'
+                ? 'bg-gradient-to-r from-sky-500 to-indigo-500 text-slate-950 font-bold shadow-md shadow-sky-500/20'
+                : 'text-sky-400 bg-sky-500/10 hover:bg-sky-500/20 border border-sky-500/30 font-semibold'
+            }`}
+          >
+            <Gavel className="w-4 h-4 text-sky-400" />
+            <span>SiP Parlament</span>
           </button>
         </nav>
       </div>
