@@ -120,11 +120,33 @@ export interface KellerlisteProject {
   items: KellerlisteItem[];
 }
 
+export interface BackupCode {
+  /** Ersatzcode im Format XXXX-XXXX */
+  code: string;
+  /** Wurde dieser Code bereits einmalig eingelöst? */
+  used: boolean;
+  /** ISO-Zeitstempel der Einlösung */
+  usedAt?: string;
+}
+
+export interface TwoFactorConfig {
+  /** 2FA per Authentifizierungs-App aktiviert */
+  enabled: boolean;
+  /** Base32-kodiertes TOTP-Secret */
+  secret: string;
+  /** 10 einmalig verwendbare Ersatzcodes als Ausfallsicherheit */
+  backupCodes: BackupCode[];
+  /** Erstellungszeitpunkt */
+  createdAt: string;
+}
+
 export interface AppSettings {
   clubName: string;
   adminPassword: string;
   /** E-Mail-Adresse für die 2-Faktor-Authentifizierung (2FA) zum Ändern des Admin-Passworts */
   adminEmail?: string;
+  /** 2-Faktor-Authentifizierung per Authenticator-App (TOTP) + 10 Ersatzcodes */
+  twoFactor?: TwoFactorConfig;
   /** Liste der erlaubten Namen für Buchungen / Entnahmen (im Admin-Menü anpassbar) */
   allowedMembers: string[];
   /** Zugangsdaten (Benutzername + Passwort) der berechtigten Personen für den App-Login */

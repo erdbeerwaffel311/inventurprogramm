@@ -6,6 +6,7 @@ import {
   InventoryTransaction,
   KellerlisteProject,
   MemberAccount,
+  TwoFactorConfig,
 } from '../types';
 
 export const CONFIG_ROW_ID = '__keller_config__';
@@ -14,6 +15,7 @@ export interface CloudConfigPayload {
   clubName: string;
   adminPassword: string;
   adminEmail?: string;
+  twoFactor?: TwoFactorConfig;
   allowedMembers?: string[];
   memberAccounts?: MemberAccount[];
   projectLists?: KellerlisteProject[];
@@ -336,6 +338,7 @@ export async function pushConfigToSupabase(
     clubName: settings.clubName,
     adminPassword: settings.adminPassword,
     adminEmail: settings.adminEmail || '',
+    twoFactor: settings.twoFactor,
     allowedMembers: settings.allowedMembers || [],
     memberAccounts: settings.memberAccounts || [],
     projectLists: settings.projectLists || [],
@@ -376,6 +379,7 @@ export async function pushToSupabase(
     clubName: settings.clubName,
     adminPassword: settings.adminPassword,
     adminEmail: settings.adminEmail || '',
+    twoFactor: settings.twoFactor,
     allowedMembers: settings.allowedMembers || [],
     memberAccounts: settings.memberAccounts || [],
     projectLists: settings.projectLists || [],

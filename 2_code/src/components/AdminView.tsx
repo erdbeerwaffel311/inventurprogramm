@@ -26,15 +26,24 @@ import {
   KeyRound,
   Users,
   UserPlus,
+  Smartphone,
+  FileText,
+  AlertTriangle,
+  ChevronDown,
+  ChevronUp,
+  ArrowLeft,
+  ShieldAlert,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import {
   AppSettings,
+  BackupCode,
   CategoryId,
   CategoryInfo,
   InventoryItem,
   InventoryTransaction,
   MemberAccount,
+  TwoFactorConfig,
 } from '../types';
 import {
   CATEGORIES,
@@ -63,6 +72,14 @@ import {
   SUPABASE_SETUP_SQL,
   verifyAdmin2FACode,
 } from '../utils/supabaseSync';
+import {
+  formatBackupCodesForExport,
+  generateBackupCodes,
+  generateTotpSecret,
+  getOtpAuthUrl,
+  verifyTotp,
+  verifyTwoFactorInput,
+} from '../utils/totp';
 
 interface AdminViewProps {
   items: InventoryItem[];
@@ -172,30 +189,71 @@ export const AdminView: React.FC<AdminViewProps> = ({
   const [copiedSql, setCopiedSql] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
 
-  // State für 2FA-Schutz (Admin-Passwort & 2FA-E-Mail-Adresse)
-  const [initial2FAEmailInput, setInitial2FAEmailInput] = useState(settings.adminEmail || '');
-  const [twoFactorStage, setTwoFactorStage] = useState<'idle' | 'code_sent' | 'verified'>('idle');
-  const [twoFactorCodeInput, setTwoFactorCodeInput] = useState('');
-  const [twoFactorNewPassword, setTwoFactorNewPassword] = useState('');
-  const [twoFactorNewEmail, setTwoFactorNewEmail] = useState(settings.adminEmail || '');
-  const [twoFactorLoading, setTwoFactorLoading] = useState(false);
-  const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
+  // Stufen für Admin-Login:
+  // 'password': Schritt 1 - Passwort eingeben
+  // 'totp': Schritt 2 - 6-stelliger Handycode aus der Authenticator-App (nach korrektem Passwort)
+  // 'emergency_backup': Notfall-Fallback - Wenn Passwort vergessen ODER kein Zugriff auf Handycode
+  const [loginStep, setLoginStep] = useState<'password' | 'totp' | 'emergency_backup'>('password');
+  const [totpCodeInput, setTotpCodeInput] = useState('');
+  const [emergencyCodeInput, setEmergencyCodeInput] = useState('');
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [unlockLoading, setUnlockLoading] = useState(false);
+
+  // 2FA Setup State (TOTP + 10 Ersatzcodes)
+  const [totpSetupActive, setTotpSetupActive] = useState(false);
+  const [draftSecret, setDraftSecret] = useState('');
+  const [draftBackupCodes, setDraftBackupCodes] = useState<BackupCode[]>([]);
+  const [setupCodeInput, setSetupCodeInput] = useState('');
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [copiedSecret, setCopiedSecret] = useState(false);
+  const [copiedDraftBackupCodes, setCopiedDraftBackupCodes] = useState(false);
+
+  // Passwort-Änderung mit 2FA
+  const [showChangePassword, setShowChangePassword] = useState(false);
+  const [newAdminPassword, setNewAdminPassword] = useState('');
+  const [confirmAdminPassword, setConfirmAdminPassword] = useState('');
+  const [changePassword2FACode, setChangePassword2FACode] = useState('');
+  const [changePasswordError, setChangePasswordError] = useState<string | null>(null);
+  const [changePasswordLoading, setChangePasswordLoading] = useState(false);
+
+  // Passwort-Änderung ohne 2FA
+  const [directOldPassword, setDirectOldPassword] = useState('');
+  const [directNewPassword, setDirectNewPassword] = useState('');
+  const [directConfirmPassword, setDirectConfirmPassword] = useState('');
+  const [directPasswordError, setDirectPasswordError] = useState<string | null>(null);
+
+  // Ersatzcodes anzeigen & verwalten
+  const [showBackupCodesManager, setShowBackupCodesManager] = useState(false);
+  const [backupCodesAuthInput, setBackupCodesAuthInput] = useState('');
+  const [backupCodesUnlocked, setBackupCodesUnlocked] = useState(false);
+  const [backupCodesError, setBackupCodesError] = useState<string | null>(null);
+  const [copiedActiveBackupCodes, setCopiedActiveBackupCodes] = useState(false);
+
+  // 2FA Deaktivieren
+  const [showDisable2FA, setShowDisable2FA] = useState(false);
+  const [disable2FACode, setDisable2FACode] = useState('');
+  const [disable2FAError, setDisable2FAError] = useState<string | null>(null);
+  const [disable2FALoading, setDisable2FALoading] = useState(false);
 
   useEffect(() => {
     setSettingsForm(settings);
-    if (settings.adminEmail) {
-      setTwoFactorNewEmail(settings.adminEmail);
-    }
   }, [settings]);
 
   useEffect(() => {
     if (initial2FAVerified) {
-      setTwoFactorStage('verified');
-      setTwoFactorNewEmail(settings.adminEmail || '');
       setAdminSubTab('settings');
       onClearInitial2FAVerified?.();
     }
-  }, [initial2FAVerified, settings.adminEmail]);
+  }, [initial2FAVerified]);
+
+  useEffect(() => {
+    if (!isUnlocked) {
+      setLoginStep('password');
+      setTotpCodeInput('');
+      setEmergencyCodeInput('');
+      setUnlockError(null);
+    }
+  }, [isUnlocked]);
 
   function handleAddAllowedMember(e: React.FormEvent) {
     e.preventDefault();
@@ -294,8 +352,6 @@ export const AdminView: React.FC<AdminViewProps> = ({
       ) {
         const params = new URLSearchParams(window.location.search);
         if (params.get('2fa') === 'verify' || window.location.hash.includes('access_token')) {
-          setTwoFactorStage('verified');
-          setTwoFactorNewEmail(settings.adminEmail || '');
           setAdminSubTab('settings');
           if (!isUnlocked) {
             onUnlock();
@@ -310,100 +366,311 @@ export const AdminView: React.FC<AdminViewProps> = ({
     };
   }, [settings, isUnlocked]);
 
-  async function handleRequest2FACode() {
-    if (!settings.adminEmail?.trim()) return;
-    setTwoFactorLoading(true);
-    setTwoFactorError(null);
-    try {
-      const res = await sendAdmin2FAEmail(settings, settings.adminEmail);
-      setTwoFactorStage('code_sent');
-      setTwoFactorNewEmail(settings.adminEmail);
-      setTwoFactorNewPassword('');
-      if (res.rateLimited) {
-        showBanner(
-          'Eingabefeld geöffnet! (Hinweis: Supabase erlaubt im Gratis-Tarif max. 2 neue E-Mails pro Stunde – du kannst deinen bestehenden Link oder Code direkt unten eingeben.)'
-        );
-      } else {
-        showBanner(`2FA-Bestätigungs-E-Mail wurde an ${settings.adminEmail} gesendet!`);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Fehler beim Senden der 2FA-E-Mail.';
-      setTwoFactorError(msg);
-      // Eingabefeld trotzdem öffnen, damit ein bereits empfangener Link/Code genutzt werden kann
-      setTwoFactorStage('code_sent');
-    } finally {
-      setTwoFactorLoading(false);
-    }
-  }
-
-  async function handleVerify2FACode(e: React.FormEvent) {
+  async function handleTotpStepSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!settings.adminEmail?.trim() || !twoFactorCodeInput.trim()) return;
-    setTwoFactorLoading(true);
-    setTwoFactorError(null);
+    if (!settings.twoFactor?.enabled || !totpCodeInput.trim()) return;
+
+    setUnlockLoading(true);
+    setUnlockError(null);
     try {
-      const ok = await verifyAdmin2FACode(settings, settings.adminEmail, twoFactorCodeInput);
+      const ok = await verifyTotp(settings.twoFactor.secret, totpCodeInput.trim());
       if (ok) {
-        setTwoFactorStage('verified');
-        setTwoFactorCodeInput('');
-        setTwoFactorError(null);
-        showBanner('2FA erfolgreich bestätigt! Du kannst Passwort und 2FA-E-Mail jetzt ändern.');
+        setPasswordInput('');
+        setTotpCodeInput('');
+        setLoginStep('password');
+        setCounts(buildInitialCountState(items));
+        showBanner('Erfolgreich mit Passwort & 2FA-Handycode entsperrt!');
+        onUnlock();
       } else {
-        setTwoFactorError(
-          'Ungültiger oder abgelaufener Code. Bitte prüfe den Zahlencode oder füge den Bestätigungs-Link aus der E-Mail ein.'
+        setUnlockError(
+          'Falscher oder abgelaufener Handycode. Bitte prüfe den aktuellen 6-stelligen Code in deiner Authenticator-App.'
         );
       }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '2FA-Prüfung fehlgeschlagen.';
-      setTwoFactorError(msg);
+    } catch {
+      setUnlockError('Fehler bei der Überprüfung des Handycodes.');
     } finally {
-      setTwoFactorLoading(false);
+      setUnlockLoading(false);
     }
   }
 
-  function handleSave2FAProtectedChanges(e: React.FormEvent) {
+  async function handleEmergencyBackupSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (twoFactorStage !== 'verified') return;
+    if (!settings.twoFactor?.enabled || !emergencyCodeInput.trim()) return;
 
-    const nextEmail = twoFactorNewEmail.trim();
-    if (!nextEmail || !nextEmail.includes('@')) {
-      setTwoFactorError('Bitte eine gültige 2FA-E-Mail-Adresse eingeben.');
-      return;
+    setUnlockLoading(true);
+    setUnlockError(null);
+    try {
+      const res = await verifyTwoFactorInput(settings.twoFactor, emergencyCodeInput.trim());
+      if (res.valid) {
+        if (res.isBackupCode && res.updatedBackupCodes) {
+          const updated: AppSettings = {
+            ...settingsForm,
+            twoFactor: {
+              ...settings.twoFactor,
+              backupCodes: res.updatedBackupCodes,
+            },
+          };
+          setSettingsForm(updated);
+          onUpdateSettings(updated);
+          showBanner(
+            `Admin-Bereich mit Notfall-Ersatzcode ${res.usedBackupCode} entsperrt! Dieser Code wurde entwertet (${res.remainingBackupCodes} von 10 Codes übrig).`
+          );
+        } else {
+          showBanner('Erfolgreich entsperrt!');
+        }
+        setPasswordInput('');
+        setTotpCodeInput('');
+        setEmergencyCodeInput('');
+        setLoginStep('password');
+        setCounts(buildInitialCountState(items));
+        onUnlock();
+      } else {
+        setUnlockError(res.errorMessage || 'Ungültiger oder bereits verwendeter Notfallcode.');
+      }
+    } catch {
+      setUnlockError('Fehler bei der Notfall-Verifizierung.');
+    } finally {
+      setUnlockLoading(false);
     }
-
-    const nextPassword = twoFactorNewPassword.trim()
-      ? twoFactorNewPassword.trim()
-      : settings.adminPassword;
-
-    const updated: AppSettings = {
-      ...settingsForm,
-      adminPassword: nextPassword,
-      adminEmail: nextEmail,
-    };
-
-    setSettingsForm(updated);
-    onUpdateSettings(updated);
-    setTwoFactorStage('idle');
-    setTwoFactorNewPassword('');
-    setTwoFactorError(null);
-    showBanner('Admin-Passwort und 2FA-E-Mail-Adresse wurden sicher aktualisiert!');
   }
 
-  function handleSaveInitial2FAEmail() {
-    const clean = initial2FAEmailInput.trim();
-    if (!clean || !clean.includes('@')) {
-      setTwoFactorError('Bitte eine gültige E-Mail-Adresse für den 2FA-Schutz eingeben.');
+  function handleStartTotpSetup() {
+    const secret = generateTotpSecret(20);
+    const codes = generateBackupCodes(10);
+    setDraftSecret(secret);
+    setDraftBackupCodes(codes);
+    setSetupCodeInput('');
+    setSetupError(null);
+    setCopiedSecret(false);
+    setCopiedDraftBackupCodes(false);
+    setTotpSetupActive(true);
+  }
+
+  async function handleConfirmTotpSetup(e: React.FormEvent) {
+    e.preventDefault();
+    setSetupError(null);
+    if (!draftSecret || !setupCodeInput.trim()) {
+      setSetupError('Bitte gib den 6-stelligen Code aus deiner Authenticator-App ein.');
       return;
     }
+
+    try {
+      const ok = await verifyTotp(draftSecret, setupCodeInput.trim());
+      if (!ok) {
+        setSetupError('Ungültiger 6-stelliger Code. Bitte prüfe den aktuellen Code in deiner Authenticator-App.');
+        return;
+      }
+
+      const newTwoFactor: TwoFactorConfig = {
+        enabled: true,
+        secret: draftSecret,
+        backupCodes: draftBackupCodes,
+        createdAt: new Date().toISOString(),
+      };
+
+      const updated: AppSettings = {
+        ...settingsForm,
+        twoFactor: newTwoFactor,
+      };
+
+      setSettingsForm(updated);
+      onUpdateSettings(updated);
+      setTotpSetupActive(false);
+      setSetupCodeInput('');
+      showBanner('2-Faktor-Authentifizierung erfolgreich aktiviert! 10 Ersatzcodes sind gesichert.');
+    } catch {
+      setSetupError('Fehler bei der Überprüfung des Codes.');
+    }
+  }
+
+  function handleDownloadBackupCodes(codes: BackupCode[]) {
+    const content = formatBackupCodesForExport(codes, settings.clubName);
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${settings.clubName.toLowerCase().replace(/[^a-z0-9]/g, '_')}_2fa_ersatzcodes.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function handleCopyBackupCodes(codes: BackupCode[], setCopied: (v: boolean) => void) {
+    const content = formatBackupCodesForExport(codes, settings.clubName);
+    navigator.clipboard.writeText(content);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2500);
+  }
+
+  async function handleChangePasswordWith2FA(e: React.FormEvent) {
+    e.preventDefault();
+    setChangePasswordError(null);
+
+    if (newAdminPassword.length < 4) {
+      setChangePasswordError('Das neue Passwort muss mindestens 4 Zeichen lang sein.');
+      return;
+    }
+    if (newAdminPassword !== confirmAdminPassword) {
+      setChangePasswordError('Die Passwörter stimmen nicht überein.');
+      return;
+    }
+    if (!changePassword2FACode.trim()) {
+      setChangePasswordError('Bitte gib einen 6-stelligen Authenticator-Code oder Ersatzcode ein.');
+      return;
+    }
+
+    setChangePasswordLoading(true);
+    try {
+      const res = await verifyTwoFactorInput(settings.twoFactor, changePassword2FACode.trim());
+      if (!res.valid) {
+        setChangePasswordError(res.errorMessage || 'Ungültiger 2FA- oder Ersatzcode.');
+        return;
+      }
+
+      const nextBackupCodes = (res.isBackupCode && res.updatedBackupCodes)
+        ? res.updatedBackupCodes
+        : settings.twoFactor!.backupCodes;
+
+      const updated: AppSettings = {
+        ...settingsForm,
+        adminPassword: newAdminPassword.trim(),
+        twoFactor: {
+          ...settings.twoFactor!,
+          backupCodes: nextBackupCodes,
+        },
+      };
+
+      setSettingsForm(updated);
+      onUpdateSettings(updated);
+      setShowChangePassword(false);
+      setNewAdminPassword('');
+      setConfirmAdminPassword('');
+      setChangePassword2FACode('');
+
+      if (res.isBackupCode) {
+        showBanner(`Admin-Passwort geändert! Ersatzcode ${res.usedBackupCode} wurde entwertet (${res.remainingBackupCodes} von 10 Codes übrig).`);
+      } else {
+        showBanner('Admin-Passwort erfolgreich mit 2FA aktualisiert!');
+      }
+    } catch {
+      setChangePasswordError('Fehler bei der 2FA-Verifizierung.');
+    } finally {
+      setChangePasswordLoading(false);
+    }
+  }
+
+  function handleChangePasswordDirect(e: React.FormEvent) {
+    e.preventDefault();
+    setDirectPasswordError(null);
+
+    if (directOldPassword !== settings.adminPassword) {
+      setDirectPasswordError('Das bisherige Passwort ist nicht korrekt.');
+      return;
+    }
+    if (directNewPassword.length < 4) {
+      setDirectPasswordError('Das neue Passwort muss mindestens 4 Zeichen lang sein.');
+      return;
+    }
+    if (directNewPassword !== directConfirmPassword) {
+      setDirectPasswordError('Die neuen Passwörter stimmen nicht überein.');
+      return;
+    }
+
     const updated: AppSettings = {
       ...settingsForm,
-      adminPassword: settings.adminPassword,
-      adminEmail: clean,
+      adminPassword: directNewPassword.trim(),
     };
     setSettingsForm(updated);
     onUpdateSettings(updated);
-    setTwoFactorError(null);
-    showBanner(`2FA-Schutz mit E-Mail „${clean}“ erfolgreich aktiviert!`);
+    setDirectOldPassword('');
+    setDirectNewPassword('');
+    setDirectConfirmPassword('');
+    showBanner('Admin-Passwort erfolgreich geändert! (Tipp: Aktiviere 2FA für zusätzliche Sicherheit)');
+  }
+
+  async function handleUnlockBackupCodesView(e: React.FormEvent) {
+    e.preventDefault();
+    setBackupCodesError(null);
+    if (!backupCodesAuthInput.trim()) return;
+
+    try {
+      const res = await verifyTwoFactorInput(settings.twoFactor, backupCodesAuthInput.trim());
+      if (!res.valid) {
+        setBackupCodesError(res.errorMessage || 'Ungültiger 2FA-Code.');
+        return;
+      }
+
+      if (res.isBackupCode && res.updatedBackupCodes) {
+        const updated: AppSettings = {
+          ...settingsForm,
+          twoFactor: {
+            ...settings.twoFactor!,
+            backupCodes: res.updatedBackupCodes,
+          },
+        };
+        setSettingsForm(updated);
+        onUpdateSettings(updated);
+      }
+
+      setBackupCodesUnlocked(true);
+      setBackupCodesAuthInput('');
+    } catch {
+      setBackupCodesError('Fehler bei der Code-Prüfung.');
+    }
+  }
+
+  function handleRegenerateBackupCodes() {
+    if (!window.confirm('Möchtest du wirklich 10 neue Ersatzcodes generieren? Alle bisherigen Ersatzcodes werden dabei sofort ungültig!')) {
+      return;
+    }
+
+    const freshCodes = generateBackupCodes(10);
+    const updated: AppSettings = {
+      ...settingsForm,
+      twoFactor: {
+        ...settings.twoFactor!,
+        backupCodes: freshCodes,
+      },
+    };
+    setSettingsForm(updated);
+    onUpdateSettings(updated);
+    showBanner('10 neue Ersatzcodes wurden generiert! Bitte sichere diese sofort.');
+  }
+
+  async function handleDisable2FA(e: React.FormEvent) {
+    e.preventDefault();
+    setDisable2FAError(null);
+    if (!disable2FACode.trim()) {
+      setDisable2FAError('Bitte gib einen 6-stelligen Code oder Ersatzcode ein.');
+      return;
+    }
+
+    setDisable2FALoading(true);
+    try {
+      const res = await verifyTwoFactorInput(settings.twoFactor, disable2FACode.trim());
+      if (!res.valid) {
+        setDisable2FAError(res.errorMessage || 'Ungültiger Code.');
+        return;
+      }
+
+      const updated: AppSettings = {
+        ...settingsForm,
+        twoFactor: undefined,
+      };
+
+      setSettingsForm(updated);
+      onUpdateSettings(updated);
+      setShowDisable2FA(false);
+      setDisable2FACode('');
+      setBackupCodesUnlocked(false);
+      setShowBackupCodesManager(false);
+      showBanner('2-Faktor-Authentifizierung wurde deaktiviert.');
+    } catch {
+      setDisable2FAError('Fehler beim Deaktivieren von 2FA.');
+    } finally {
+      setDisable2FALoading(false);
+    }
   }
 
   function showBanner(msg: string) {
@@ -438,9 +705,15 @@ export const AdminView: React.FC<AdminViewProps> = ({
     e.preventDefault();
     if (passwordInput === settings.adminPassword) {
       setPasswordError(false);
-      setPasswordInput('');
-      setCounts(buildInitialCountState(items));
-      onUnlock();
+      if (settings.twoFactor?.enabled) {
+        setLoginStep('totp');
+        setUnlockError(null);
+        setTotpCodeInput('');
+      } else {
+        setPasswordInput('');
+        setCounts(buildInitialCountState(items));
+        onUnlock();
+      }
     } else {
       setPasswordError(true);
     }
@@ -675,46 +948,229 @@ export const AdminView: React.FC<AdminViewProps> = ({
   if (!isUnlocked) {
     return (
       <div className="max-w-md mx-auto my-8 bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5 shadow-2xl">
-        <div className="flex items-center gap-3">
-          <div className="w-11 h-11 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center">
-            <Lock className="w-5 h-5 text-sky-400" />
-          </div>
-          <div>
-            <h2 className="font-bold text-white text-lg">Admin-Bereich & Erstinventur</h2>
-            <p className="text-xs text-slate-400">
-              Passwortgeschützter Bereich für Erstinventur, Artikelpflege & Cloud-Datenbank
-            </p>
-          </div>
-        </div>
+        {/* Ebene 1: Passwort-Eingabe (Schritt 1) */}
+        {loginStep === 'password' && (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center shrink-0">
+                <Lock className="w-5 h-5 text-sky-400" />
+              </div>
+              <div>
+                <h2 className="font-bold text-white text-lg">Admin-Bereich entsperren</h2>
+                <p className="text-xs text-slate-400">
+                  {settings.twoFactor?.enabled
+                    ? 'Schritt 1 von 2: Admin-Passwort eingeben'
+                    : 'Passwortgeschützter Bereich für Erstinventur, Artikelpflege & Einstellungen'}
+                </p>
+              </div>
+            </div>
 
-        <form onSubmit={handleLogin} className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-slate-300 mb-1.5">
-              Admin-Passwort eingeben
-            </label>
-            <input
-              type="password"
-              value={passwordInput}
-              onChange={(e) => setPasswordInput(e.target.value)}
-              placeholder="Passwort"
-              autoFocus
-              className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-sky-500 focus:outline-none text-sm text-white"
-            />
-            {passwordError && (
-              <p className="text-xs text-rose-400 mt-1.5">
-                Falsches Passwort.
-              </p>
-            )}
-          </div>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  Admin-Passwort
+                </label>
+                <input
+                  type="password"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder="Passwort"
+                  autoFocus
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-sky-500 focus:outline-none text-sm text-white"
+                />
+                {passwordError && (
+                  <p className="text-xs text-rose-400 mt-1.5">
+                    Falsches Passwort.
+                  </p>
+                )}
+              </div>
 
-          <button
-            type="submit"
-            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-sm shadow-lg shadow-sky-500/20 cursor-pointer"
-          >
-            <Unlock className="w-4 h-4" />
-            <span>Admin-Bereich entsperren</span>
-          </button>
-        </form>
+              <button
+                type="submit"
+                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-sm shadow-lg shadow-sky-500/20 cursor-pointer"
+              >
+                {settings.twoFactor?.enabled ? (
+                  <>
+                    <KeyRound className="w-4 h-4" />
+                    <span>Weiter zu Schritt 2 (Handycode)</span>
+                  </>
+                ) : (
+                  <>
+                    <Unlock className="w-4 h-4" />
+                    <span>Admin-Bereich entsperren</span>
+                  </>
+                )}
+              </button>
+
+              {settings.twoFactor?.enabled && (
+                <div className="pt-2 text-center border-t border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLoginStep('emergency_backup');
+                      setUnlockError(null);
+                      setEmergencyCodeInput('');
+                    }}
+                    className="text-xs text-amber-400 hover:text-amber-300 hover:underline cursor-pointer flex items-center justify-center gap-1.5 w-full py-1"
+                  >
+                    <AlertTriangle className="w-3.5 h-3.5" />
+                    <span>Passwort vergessen? Mit Notfall-Ersatzcode entsperren</span>
+                  </button>
+                </div>
+              )}
+            </form>
+          </>
+        )}
+
+        {/* Ebene 2: Handycode aus Authenticator-App (Schritt 2) */}
+        {loginStep === 'totp' && (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
+                <Smartphone className="w-5 h-5 text-emerald-400" />
+              </div>
+              <div>
+                <h2 className="font-bold text-white text-lg">2-Faktor-Authentifizierung</h2>
+                <p className="text-xs text-emerald-400 font-medium">
+                  Schritt 2 von 2: 6-stelligen Handycode bestätigen
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-200 leading-relaxed flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>
+                Passwort korrekt! Bitte gib den 6-stelligen Code aus deiner <strong>Authenticator-App</strong> ein:
+              </span>
+            </div>
+
+            <form onSubmit={handleTotpStepSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  6-stelliger Code aus der Authenticator-App
+                </label>
+                <input
+                  type="text"
+                  maxLength={8}
+                  value={totpCodeInput}
+                  onChange={(e) => setTotpCodeInput(e.target.value)}
+                  placeholder="z.B. 123456"
+                  autoFocus
+                  className="w-full px-3.5 py-3 rounded-xl bg-slate-950 border border-emerald-500 focus:outline-none text-base text-white font-mono font-bold tracking-widest text-center"
+                />
+                {unlockError && (
+                  <p className="text-xs text-rose-400 mt-1.5">
+                    {unlockError}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginStep('password');
+                    setUnlockError(null);
+                  }}
+                  className="px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer flex items-center gap-1.5"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Zurück</span>
+                </button>
+                <button
+                  type="submit"
+                  disabled={unlockLoading || !totpCodeInput.trim()}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>{unlockLoading ? 'Prüfe...' : 'Admin-Bereich entsperren'}</span>
+                </button>
+              </div>
+
+              <div className="pt-2 text-center border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginStep('emergency_backup');
+                    setUnlockError(null);
+                    setEmergencyCodeInput('');
+                  }}
+                  className="text-xs text-amber-400 hover:text-amber-300 hover:underline cursor-pointer flex items-center justify-center gap-1.5 w-full py-1"
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span>Kein Zugriff auf das Handy? Mit Notfall-Ersatzcode entsperren</span>
+                </button>
+              </div>
+            </form>
+          </>
+        )}
+
+        {/* Notfall-Fallback mit Ersatzcode */}
+        {loginStep === 'emergency_backup' && (
+          <>
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+                <ShieldAlert className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <h2 className="font-bold text-white text-lg">Notfall-Entsperrung</h2>
+                <p className="text-xs text-slate-400">
+                  Mit einem deiner 10 Offline-Ersatzcodes
+                </p>
+              </div>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 leading-relaxed flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <span>
+                Verwende diese Option, wenn du dein <strong>Admin-Passwort vergessen</strong> hast oder <strong>keinen Zugriff auf deine Authenticator-App</strong> hast. Jeder Ersatzcode kann genau einmal verwendet werden und wird danach entwertet.
+              </span>
+            </div>
+
+            <form onSubmit={handleEmergencyBackupSubmit} className="space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  Notfall-Ersatzcode eingeben
+                </label>
+                <input
+                  type="text"
+                  value={emergencyCodeInput}
+                  onChange={(e) => setEmergencyCodeInput(e.target.value)}
+                  placeholder="z.B. K7M4-9XP2"
+                  autoFocus
+                  className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-700 focus:border-amber-500 focus:outline-none text-sm text-white font-mono tracking-wider text-center"
+                />
+                {unlockError && (
+                  <p className="text-xs text-rose-400 mt-1.5">
+                    {unlockError}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLoginStep('password');
+                    setUnlockError(null);
+                  }}
+                  className="flex-1 py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <ArrowLeft className="w-3.5 h-3.5" />
+                  <span>Zurück</span>
+                </button>
+                <button
+                  type="submit"
+                  disabled={unlockLoading || !emergencyCodeInput.trim()}
+                  className="flex-[2] flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-amber-500/20 cursor-pointer disabled:opacity-50"
+                >
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>{unlockLoading ? 'Prüfe...' : 'Mit Notfallcode entsperren'}</span>
+                </button>
+              </div>
+            </form>
+          </>
+        )}
       </div>
     );
   }
@@ -1724,223 +2180,595 @@ export const AdminView: React.FC<AdminViewProps> = ({
                 <span>Allgemeine Einstellungen speichern</span>
               </button>
 
-              {/* 2FA-Geschützter Bereich: Admin-Passwort & 2FA-E-Mail */}
+              {/* 2FA-Geschützter Bereich: Admin-Passwort & 2FA-Schutz */}
               <div className="pt-5 border-t border-slate-800 space-y-4">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <h4 className="font-bold text-white text-sm flex items-center gap-2">
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    <span>Admin-Passwort & 2FA-Schutz (Zwei-Faktor-Authentifizierung)</span>
+                    <span>Admin-Passwort & 2-Faktor-Authentifizierung (2FA)</span>
                   </h4>
-                  <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold">
-                    Geheim & geschützt
-                  </span>
+                  {settings.twoFactor?.enabled ? (
+                    <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-semibold flex items-center gap-1.5">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>2FA Aktiv (Authenticator-App)</span>
+                    </span>
+                  ) : (
+                    <span className="text-[11px] px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold flex items-center gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Nicht aktiviert</span>
+                    </span>
+                  )}
                 </div>
 
-                {twoFactorError && (
-                  <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
-                    {twoFactorError}
-                  </div>
-                )}
+                {!settings.twoFactor?.enabled ? (
+                  /* =========================================================
+                     FALL 1: 2FA NOCH NICHT AKTIV
+                     ========================================================= */
+                  <div className="space-y-4">
+                    {!totpSetupActive ? (
+                      <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
+                        <div className="flex items-start gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-sky-500/15 border border-sky-500/30 flex items-center justify-center shrink-0 mt-0.5">
+                            <Smartphone className="w-5 h-5 text-sky-400" />
+                          </div>
+                          <div className="space-y-1">
+                            <h5 className="font-bold text-white text-xs sm:text-sm">
+                              2FA per Authentifizierungs-App einrichten
+                            </h5>
+                            <p className="text-xs text-slate-300 leading-relaxed">
+                              Schütze den Admin-Bereich vor unbefugtem Zugriff mit einem standardmäßigen 6-stelligen Code aus deiner Authenticator-App (z. B. <strong>Google Authenticator</strong>, <strong>Apple Passwörter</strong>, <strong>Microsoft Authenticator</strong>, <strong>1Password</strong>). Zusätzlich erhältst du <strong>10 Offline-Ersatzcodes</strong> für den Notfall.
+                            </p>
+                          </div>
+                        </div>
 
-                {!settings.adminEmail?.trim() ? (
-                  /* Erstmalige Einrichtung der 2FA-E-Mail-Adresse */
-                  <div className="p-4 rounded-xl bg-slate-950 border border-sky-500/30 space-y-3">
-                    <p className="text-xs text-slate-300 leading-relaxed">
-                      Hinterlege hier einmalig deine <strong>Admin-E-Mail-Adresse für die 2-Faktor-Authentifizierung (2FA)</strong>. Sobald sie gespeichert ist, können das Admin-Passwort und die 2FA-E-Mail-Adresse nur noch nach Bestätigung über diese E-Mail geändert werden.
-                    </p>
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <div className="relative flex-1">
-                        <Mail className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                        <input
-                          type="email"
-                          value={initial2FAEmailInput}
-                          onChange={(e) => setInitial2FAEmailInput(e.target.value)}
-                          placeholder="deine-admin-email@beispiel.de"
-                          className="w-full pl-9 pr-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-sm text-white"
-                        />
+                        <div className="pt-2 flex flex-col sm:flex-row gap-2">
+                          <button
+                            type="button"
+                            onClick={handleStartTotpSetup}
+                            className="flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-emerald-500/20 cursor-pointer"
+                          >
+                            <ShieldCheck className="w-4 h-4" />
+                            <span>2FA jetzt einrichten (QR-Code + 10 Ersatzcodes)</span>
+                          </button>
+                        </div>
+
+                        {/* Direktes Ändern des Admin-Passworts, solange 2FA noch nicht aktiv ist */}
+                        <div className="pt-4 border-t border-slate-900 space-y-3">
+                          <span className="text-xs font-semibold text-slate-400 block">
+                            Alternativ: Admin-Passwort direkt ändern (ohne 2FA)
+                          </span>
+                          {directPasswordError && (
+                            <div className="p-2.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
+                              {directPasswordError}
+                            </div>
+                          )}
+                          <form onSubmit={handleChangePasswordDirect} className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <input
+                              type="password"
+                              required
+                              value={directOldPassword}
+                              onChange={(e) => setDirectOldPassword(e.target.value)}
+                              placeholder="Bisheriges Passwort"
+                              className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs sm:text-sm text-white"
+                            />
+                            <input
+                              type="password"
+                              required
+                              value={directNewPassword}
+                              onChange={(e) => setDirectNewPassword(e.target.value)}
+                              placeholder="Neues Passwort"
+                              className="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs sm:text-sm text-white"
+                            />
+                            <div className="flex gap-2">
+                              <input
+                                type="password"
+                                required
+                                value={directConfirmPassword}
+                                onChange={(e) => setDirectConfirmPassword(e.target.value)}
+                                placeholder="Wiederholen"
+                                className="flex-1 px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-700 text-xs sm:text-sm text-white"
+                              />
+                              <button
+                                type="submit"
+                                className="px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold text-xs cursor-pointer shrink-0"
+                              >
+                                Speichern
+                              </button>
+                            </div>
+                          </form>
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={handleSaveInitial2FAEmail}
-                        className="flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer shrink-0"
-                      >
-                        <ShieldCheck className="w-4 h-4" />
-                        <span>2FA-E-Mail aktivieren</span>
-                      </button>
-                    </div>
+                    ) : (
+                      /* SETUP-WIZARD: QR-Code + 10 Ersatzcodes + 6-stellige Bestätigung */
+                      <div className="p-5 rounded-2xl bg-slate-950 border border-sky-500/40 space-y-6">
+                        <div className="flex items-center justify-between gap-2 border-b border-slate-800 pb-3">
+                          <h5 className="font-bold text-white text-sm flex items-center gap-2">
+                            <ShieldCheck className="w-4 h-4 text-sky-400" />
+                            <span>2FA-Einrichtung: Authenticator-App & 10 Ersatzcodes</span>
+                          </h5>
+                          <button
+                            type="button"
+                            onClick={() => setTotpSetupActive(false)}
+                            className="text-xs text-slate-400 hover:text-white cursor-pointer"
+                          >
+                            Abbrechen
+                          </button>
+                        </div>
+
+                        {setupError && (
+                          <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
+                            {setupError}
+                          </div>
+                        )}
+
+                        {/* Schritt 1: QR-Code & Manueller Schlüssel */}
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-sky-500 text-slate-950 font-black text-xs flex items-center justify-center">
+                              1
+                            </span>
+                            <span className="font-bold text-white text-xs sm:text-sm">
+                              QR-Code in deiner Authenticator-App scannen
+                            </span>
+                          </div>
+
+                          <div className="flex flex-col sm:flex-row items-center gap-5 p-4 rounded-xl bg-slate-900 border border-slate-800">
+                            <div className="bg-white p-3 rounded-2xl shadow-xl shrink-0">
+                              <QRCodeSVG
+                                value={getOtpAuthUrl(draftSecret, 'Admin', settings.clubName)}
+                                size={160}
+                                bgColor="#ffffff"
+                                fgColor="#020617"
+                                level="M"
+                              />
+                            </div>
+                            <div className="space-y-3 flex-1 text-center sm:text-left">
+                              <p className="text-xs text-slate-300 leading-relaxed">
+                                Öffne deine bevorzugte Authentifizierungs-App (z. B. Google Authenticator, Apple Passwörter / iCloud-Schlüsselbund, 1Password, Microsoft Authenticator) und scanne diesen QR-Code.
+                              </p>
+                              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 text-left space-y-1.5">
+                                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider block">
+                                  Manueller Einrichtungsschlüssel (Secret)
+                                </span>
+                                <div className="flex items-center justify-between gap-2">
+                                  <code className="text-xs sm:text-sm font-mono font-bold text-sky-300 tracking-widest break-all">
+                                    {draftSecret.match(/.{1,4}/g)?.join(' ') || draftSecret}
+                                  </code>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(draftSecret);
+                                      setCopiedSecret(true);
+                                      setTimeout(() => setCopiedSecret(false), 2500);
+                                    }}
+                                    className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 flex items-center gap-1 cursor-pointer shrink-0"
+                                    title="Schlüssel kopieren"
+                                  >
+                                    {copiedSecret ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                                    <span className="text-[11px]">{copiedSecret ? 'Kopiert' : 'Kopieren'}</span>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Schritt 2: 10 Ersatzcodes sichern */}
+                        <div className="space-y-3">
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-amber-500 text-slate-950 font-black text-xs flex items-center justify-center">
+                              2
+                            </span>
+                            <span className="font-bold text-white text-xs sm:text-sm">
+                              Deine 10 Notfall-Ersatzcodes sichern
+                            </span>
+                          </div>
+
+                          <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 flex items-start gap-2.5 leading-relaxed">
+                            <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                            <span>
+                              <strong>Wichtig:</strong> Speichere diese 10 Ersatzcodes jetzt an einem sicheren Ort ab (z. B. in deiner Passwort-App, drucke sie aus oder lade die Datei herunter). Jeder Ersatzcode kann genau <strong>einmal</strong> als Notfall-Schlüssel verwendet werden, falls du dein Smartphone verlierst oder keinen Zugriff darauf hast.
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                            {draftBackupCodes.map((bc, idx) => (
+                              <div
+                                key={idx}
+                                className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-center space-y-0.5"
+                              >
+                                <span className="text-[10px] text-slate-400 font-semibold block">#{idx + 1}</span>
+                                <span className="font-mono font-bold text-white text-xs sm:text-sm tracking-wider">
+                                  {bc.code}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="flex flex-wrap gap-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyBackupCodes(draftBackupCodes, setCopiedDraftBackupCodes)}
+                              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-200 cursor-pointer"
+                            >
+                              {copiedDraftBackupCodes ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+                              <span>{copiedDraftBackupCodes ? '10 Ersatzcodes kopiert!' : 'Alle 10 Ersatzcodes kopieren'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadBackupCodes(draftBackupCodes)}
+                              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700 text-xs font-semibold text-sky-300 cursor-pointer"
+                            >
+                              <Download className="w-4 h-4" />
+                              <span>Als Textdatei herunterladen (.txt)</span>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Schritt 3: Bestätigungscode zur Aktivierung */}
+                        <form onSubmit={handleConfirmTotpSetup} className="space-y-3 pt-3 border-t border-slate-800">
+                          <div className="flex items-center gap-2">
+                            <span className="w-5 h-5 rounded-full bg-emerald-500 text-slate-950 font-black text-xs flex items-center justify-center">
+                              3
+                            </span>
+                            <span className="font-bold text-white text-xs sm:text-sm">
+                              Aktivierung mit 6-stelligem Code aus deiner Authenticator-App bestätigen
+                            </span>
+                          </div>
+
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="text"
+                              required
+                              maxLength={8}
+                              value={setupCodeInput}
+                              onChange={(e) => setSetupCodeInput(e.target.value)}
+                              placeholder="z.B. 123456"
+                              className="flex-1 px-4 py-2.5 rounded-xl bg-slate-900 border border-sky-500 text-sm font-mono font-bold tracking-widest text-center text-white focus:outline-none"
+                            />
+                            <button
+                              type="submit"
+                              disabled={!setupCodeInput.trim()}
+                              className="px-6 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-emerald-500/20 cursor-pointer disabled:opacity-50"
+                            >
+                              2FA jetzt aktivieren
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  /* Aktiver 2FA-Schutz */
+                  /* =========================================================
+                     FALL 2: 2FA IST BEREITS AKTIV
+                     ========================================================= */
                   <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-4">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    {/* Statusübersicht */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                       <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
-                        <span className="text-slate-400 block mb-0.5">Aktuelles Admin-Passwort:</span>
-                        <span className="font-bold text-white tracking-widest">••••••••••••</span>
-                        <span className="text-[11px] text-emerald-400 block mt-0.5">
-                          Verborgen & durch E-Mail-2FA geschützt
+                        <span className="text-slate-400 block mb-0.5">Admin-Passwort:</span>
+                        <span className="font-bold text-white tracking-widest text-sm">••••••••••••</span>
+                        <span className="text-[11px] text-emerald-400 block mt-0.5 font-medium">
+                          Durch 2FA geschützt
                         </span>
                       </div>
                       <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
-                        <span className="text-slate-400 block mb-0.5">Hinterlegte 2FA-E-Mail-Adresse:</span>
-                        <span className="font-bold text-sky-300 break-all">{settings.adminEmail}</span>
+                        <span className="text-slate-400 block mb-0.5">Authenticator-App:</span>
+                        <span className="font-bold text-sky-300 text-sm">Aktiv (TOTP)</span>
                         <span className="text-[11px] text-slate-400 block mt-0.5">
-                          Empfänger für 2FA-Bestätigungen
+                          6-stelliger Bestätigungscode
                         </span>
+                      </div>
+                      <div className="p-3 rounded-lg bg-slate-900 border border-slate-800">
+                        <span className="text-slate-400 block mb-0.5">Verfügbare Ersatzcodes:</span>
+                        {(() => {
+                          const total = settings.twoFactor?.backupCodes?.length || 10;
+                          const active = (settings.twoFactor?.backupCodes || []).filter((c) => !c.used).length;
+                          const isLow = active <= 2;
+                          return (
+                            <>
+                              <span className={`font-bold text-sm ${isLow ? 'text-amber-400' : 'text-emerald-400'}`}>
+                                {active} von {total} verfügbar
+                              </span>
+                              <span className="text-[11px] text-slate-400 block mt-0.5">
+                                {isLow ? 'Achtung: Bald aufgebraucht!' : 'Für Offline-/Notfall-Login'}
+                              </span>
+                            </>
+                          );
+                        })()}
                       </div>
                     </div>
 
-                    {twoFactorStage === 'idle' && (
-                      <div className="flex flex-col sm:flex-row gap-2">
-                        <button
-                          type="button"
-                          onClick={handleRequest2FACode}
-                          disabled={twoFactorLoading}
-                          className="flex-1 flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-sky-300 border border-sky-500/30 font-semibold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
-                        >
-                          <KeyRound className="w-4 h-4" />
-                          <span>
-                            {twoFactorLoading
-                              ? 'Sende 2FA-E-Mail...'
-                              : `Passwort / 2FA-E-Mail ändern (E-Mail senden)`}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTwoFactorStage('code_sent');
-                            setTwoFactorNewEmail(settings.adminEmail || '');
-                            setTwoFactorNewPassword('');
-                            setTwoFactorError(null);
-                          }}
-                          className="flex items-center justify-center gap-1.5 py-2.5 px-3.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700 text-xs font-medium cursor-pointer"
-                        >
-                          <span>Code / Link bereits vorhanden</span>
-                        </button>
+                    {/* Aktionsleiste */}
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowChangePassword((prev) => !prev);
+                          setShowBackupCodesManager(false);
+                          setShowDisable2FA(false);
+                          setChangePasswordError(null);
+                        }}
+                        className={`flex items-center gap-1.5 py-2 px-3.5 rounded-xl text-xs font-semibold cursor-pointer transition ${
+                          showChangePassword
+                            ? 'bg-sky-500 text-slate-950'
+                            : 'bg-slate-900 hover:bg-slate-800 text-sky-300 border border-sky-500/30'
+                        }`}
+                      >
+                        <KeyRound className="w-4 h-4" />
+                        <span>Admin-Passwort ändern</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowBackupCodesManager((prev) => !prev);
+                          setShowChangePassword(false);
+                          setShowDisable2FA(false);
+                          setBackupCodesError(null);
+                        }}
+                        className={`flex items-center gap-1.5 py-2 px-3.5 rounded-xl text-xs font-semibold cursor-pointer transition ${
+                          showBackupCodesManager
+                            ? 'bg-sky-500 text-slate-950'
+                            : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700'
+                        }`}
+                      >
+                        <FileText className="w-4 h-4" />
+                        <span>Ersatzcodes anzeigen & verwalten</span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setShowDisable2FA((prev) => !prev);
+                          setShowChangePassword(false);
+                          setShowBackupCodesManager(false);
+                          setDisable2FAError(null);
+                        }}
+                        className="flex items-center gap-1.5 py-2 px-3 rounded-xl bg-slate-900 hover:bg-rose-950/40 text-slate-400 hover:text-rose-300 border border-slate-800 hover:border-rose-500/40 text-xs font-medium cursor-pointer ml-auto"
+                      >
+                        <span>2FA deaktivieren</span>
+                      </button>
+                    </div>
+
+                    {/* Panel 1: Passwort mit 2FA ändern */}
+                    {showChangePassword && (
+                      <form
+                        onSubmit={handleChangePasswordWith2FA}
+                        className="p-4 rounded-xl bg-slate-900 border border-sky-500/30 space-y-3"
+                      >
+                        <div className="flex items-center justify-between">
+                          <h6 className="font-bold text-white text-xs sm:text-sm flex items-center gap-2">
+                            <KeyRound className="w-4 h-4 text-sky-400" />
+                            <span>Neues Admin-Passwort festlegen (2FA-Autorisierung erforderlich)</span>
+                          </h6>
+                          <button
+                            type="button"
+                            onClick={() => setShowChangePassword(false)}
+                            className="text-xs text-slate-400 hover:text-white cursor-pointer"
+                          >
+                            Schließen
+                          </button>
+                        </div>
+
+                        {changePasswordError && (
+                          <div className="p-2.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
+                            {changePasswordError}
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                          <div>
+                            <label className="block text-xs text-slate-300 mb-1">Neues Admin-Passwort</label>
+                            <input
+                              type="password"
+                              required
+                              value={newAdminPassword}
+                              onChange={(e) => setNewAdminPassword(e.target.value)}
+                              placeholder="Mindestens 4 Zeichen..."
+                              className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-300 mb-1">Passwort wiederholen</label>
+                            <input
+                              type="password"
+                              required
+                              value={confirmAdminPassword}
+                              onChange={(e) => setConfirmAdminPassword(e.target.value)}
+                              placeholder="Passwort wiederholen..."
+                              className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
+                            />
+                          </div>
+                        </div>
+
+                        <div className="pt-1">
+                          <label className="block text-xs text-sky-300 mb-1 font-semibold">
+                            6-stelliger Authenticator-Code ODER unbenutzter Ersatzcode (z.B. XXXX-XXXX)
+                          </label>
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="text"
+                              required
+                              value={changePassword2FACode}
+                              onChange={(e) => setChangePassword2FACode(e.target.value)}
+                              placeholder="Code eingeben..."
+                              className="flex-1 px-3.5 py-2 rounded-xl bg-slate-950 border border-sky-500 text-sm text-white font-mono font-bold"
+                            />
+                            <button
+                              type="submit"
+                              disabled={changePasswordLoading || !changePassword2FACode.trim()}
+                              className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
+                            >
+                              {changePasswordLoading ? 'Prüfe...' : 'Neues Passwort speichern'}
+                            </button>
+                          </div>
+                        </div>
+                      </form>
+                    )}
+
+                    {/* Panel 2: Ersatzcodes verwalten & einsehen */}
+                    {showBackupCodesManager && (
+                      <div className="p-4 rounded-xl bg-slate-900 border border-slate-700 space-y-4">
+                        <div className="flex items-center justify-between">
+                          <h6 className="font-bold text-white text-xs sm:text-sm flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-sky-400" />
+                            <span>10 Offline-Ersatzcodes verwalten</span>
+                          </h6>
+                          <button
+                            type="button"
+                            onClick={() => setShowBackupCodesManager(false)}
+                            className="text-xs text-slate-400 hover:text-white cursor-pointer"
+                          >
+                            Schließen
+                          </button>
+                        </div>
+
+                        {!backupCodesUnlocked ? (
+                          /* Autorisierung vor Einsicht der Codes */
+                          <form onSubmit={handleUnlockBackupCodesView} className="space-y-3">
+                            <p className="text-xs text-slate-300 leading-relaxed">
+                              Zum Schutz deiner Ersatzcodes: Bitte bestätige mit einem <strong>6-stelligen Authenticator-Code</strong> oder einem Ersatzcode:
+                            </p>
+                            {backupCodesError && (
+                              <div className="p-2.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-xs text-rose-300">
+                                {backupCodesError}
+                              </div>
+                            )}
+                            <div className="flex flex-col sm:flex-row gap-2">
+                              <input
+                                type="text"
+                                required
+                                value={backupCodesAuthInput}
+                                onChange={(e) => setBackupCodesAuthInput(e.target.value)}
+                                placeholder="6-stelliger Code oder Ersatzcode..."
+                                className="flex-1 px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white font-mono"
+                              />
+                              <button
+                                type="submit"
+                                className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer"
+                              >
+                                Ersatzcodes anzeigen
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          /* Freigeschaltete Ersatzcodes-Liste */
+                          <div className="space-y-3">
+                            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                              {(settings.twoFactor?.backupCodes || []).map((bc, idx) => (
+                                <div
+                                  key={idx}
+                                  className={`p-2.5 rounded-xl border text-center space-y-0.5 ${
+                                    bc.used
+                                      ? 'bg-slate-950/60 border-slate-800 text-slate-500 line-through opacity-60'
+                                      : 'bg-slate-950 border-emerald-500/40 text-emerald-200'
+                                  }`}
+                                >
+                                  <span className="text-[10px] text-slate-400 font-semibold block">#{idx + 1}</span>
+                                  <span className="font-mono font-bold text-xs sm:text-sm tracking-wider">
+                                    {bc.code}
+                                  </span>
+                                  <span className="text-[9px] block">
+                                    {bc.used ? 'Bereits verwendet' : 'Gültig'}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-800">
+                              <div className="flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleCopyBackupCodes(
+                                      settings.twoFactor?.backupCodes || [],
+                                      setCopiedActiveBackupCodes
+                                    )
+                                  }
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-700 text-xs text-slate-200 font-semibold cursor-pointer"
+                                >
+                                  {copiedActiveBackupCodes ? (
+                                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                                  ) : (
+                                    <Copy className="w-3.5 h-3.5" />
+                                  )}
+                                  <span>{copiedActiveBackupCodes ? 'Kopiert!' : 'Codes kopieren'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    handleDownloadBackupCodes(settings.twoFactor?.backupCodes || [])
+                                  }
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-950 hover:bg-slate-800 border border-slate-700 text-xs text-sky-300 font-semibold cursor-pointer"
+                                >
+                                  <Download className="w-3.5 h-3.5" />
+                                  <span>Herunterladen (.txt)</span>
+                                </button>
+                              </div>
+
+                              <button
+                                type="button"
+                                onClick={handleRegenerateBackupCodes}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-xs text-amber-300 font-semibold cursor-pointer ml-auto"
+                              >
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                <span>10 neue Ersatzcodes generieren</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
 
-                    {twoFactorStage === 'code_sent' && (
-                      <form onSubmit={handleVerify2FACode} className="space-y-3 pt-2 border-t border-slate-800">
-                        <p className="text-xs text-sky-200 leading-relaxed">
-                          Wir haben eine 2FA-E-Mail an <strong>{settings.adminEmail}</strong> gesendet.
+                    {/* Panel 3: 2FA deaktivieren */}
+                    {showDisable2FA && (
+                      <form
+                        onSubmit={handleDisable2FA}
+                        className="p-4 rounded-xl bg-rose-950/20 border border-rose-500/30 space-y-3"
+                      >
+                        <h6 className="font-bold text-rose-300 text-xs sm:text-sm flex items-center gap-2">
+                          <AlertTriangle className="w-4 h-4 text-rose-400" />
+                          <span>2-Faktor-Authentifizierung wirklich deaktivieren?</span>
+                        </h6>
+                        <p className="text-xs text-slate-300 leading-relaxed">
+                          Wenn du 2FA deaktivierst, ist dein Admin-Passwort nicht mehr durch Handy-Codes oder Ersatzcodes abgesichert. Zur Bestätigung gib bitte einen aktuellen 6-stelligen Code oder Ersatzcode ein:
                         </p>
-                        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200 space-y-1.5 leading-relaxed">
-                          <p className="font-semibold text-amber-300">
-                            Wichtig bei „localhost hat die Verbindung abgelehnt“ (ERR_CONNECTION_REFUSED):
-                          </p>
-                          <p>
-                            1. <strong>Sofort-Lösung:</strong> Wenn nach dem Klick auf den E-Mail-Link die Fehlerseite <code>localhost:3000/#access_token=...</code> erscheint, kopiere einfach diese komplette <strong>localhost-Adresse oben aus deiner Browser-Adresszeile</strong> (oder kopiere den Link direkt aus der E-Mail per Rechtsklick) und füge sie unten in das Feld ein!
-                          </p>
-                          <p>
-                            2. <strong>Dauerhafte Behebung in Supabase:</strong> Öffne in deinem Supabase-Dashboard <em>Authentication → URL Configuration</em> und ändere die <strong>Site URL</strong> von <code>http://localhost:3000</code> auf <code>https://erdbeerwaffel311.github.io/inventurprogramm/</code>.
-                          </p>
-                        </div>
+                        {disable2FAError && (
+                          <div className="p-2.5 rounded-lg bg-rose-500/20 border border-rose-500/40 text-xs text-rose-200">
+                            {disable2FAError}
+                          </div>
+                        )}
                         <div className="flex flex-col sm:flex-row gap-2">
                           <input
                             type="text"
                             required
-                            value={twoFactorCodeInput}
-                            onChange={(e) => setTwoFactorCodeInput(e.target.value)}
-                            placeholder="localhost-URL aus Adresszeile, E-Mail-Link oder 6-stelligen Code einfügen..."
-                            className="flex-1 px-3.5 py-2 rounded-xl bg-slate-900 border border-sky-500 text-sm text-white font-semibold"
+                            value={disable2FACode}
+                            onChange={(e) => setDisable2FACode(e.target.value)}
+                            placeholder="6-stelliger Code oder Ersatzcode..."
+                            className="flex-1 px-3.5 py-2 rounded-xl bg-slate-950 border border-rose-500/50 text-sm text-white font-mono"
                           />
                           <button
                             type="submit"
-                            disabled={twoFactorLoading || !twoFactorCodeInput.trim()}
-                            className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
+                            disabled={disable2FALoading || !disable2FACode.trim()}
+                            className="px-4 py-2 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs sm:text-sm cursor-pointer disabled:opacity-50"
                           >
-                            {twoFactorLoading ? 'Prüfe...' : '2FA bestätigen'}
-                          </button>
-                        </div>
-                        <div className="flex items-center justify-between text-xs">
-                          <button
-                            type="button"
-                            onClick={handleRequest2FACode}
-                            disabled={twoFactorLoading}
-                            className="text-sky-400 hover:underline cursor-pointer"
-                          >
-                            E-Mail erneut senden
+                            {disable2FALoading ? 'Deaktiviere...' : 'Jetzt 2FA deaktivieren'}
                           </button>
                           <button
                             type="button"
-                            onClick={() => {
-                              setTwoFactorStage('idle');
-                              setTwoFactorError(null);
-                            }}
-                            className="text-slate-400 hover:text-white cursor-pointer"
+                            onClick={() => setShowDisable2FA(false)}
+                            className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 cursor-pointer"
                           >
                             Abbrechen
                           </button>
                         </div>
                       </form>
                     )}
-
-                  {twoFactorStage === 'verified' && (
-                    <form
-                      onSubmit={handleSave2FAProtectedChanges}
-                      className="space-y-3 pt-3 border-t border-emerald-500/30"
-                    >
-                      <div className="flex items-center gap-2 text-xs text-emerald-300 font-semibold">
-                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-                        <span>
-                          2FA bestätigt! Du kannst jetzt das Admin-Passwort und/oder die 2FA-E-Mail-Adresse ändern:
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        <div>
-                          <label className="block text-xs text-slate-300 mb-1">
-                            Neues Admin-Passwort
-                          </label>
-                          <input
-                            type="password"
-                            value={twoFactorNewPassword}
-                            onChange={(e) => setTwoFactorNewPassword(e.target.value)}
-                            placeholder="Neues Passwort (leer = unverändert)"
-                            className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-emerald-500/50 text-sm text-white"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs text-slate-300 mb-1">
-                            2FA-E-Mail-Adresse (änderbar)
-                          </label>
-                          <input
-                            type="email"
-                            required
-                            value={twoFactorNewEmail}
-                            onChange={(e) => setTwoFactorNewEmail(e.target.value)}
-                            placeholder="neue-email@beispiel.de"
-                            className="w-full px-3.5 py-2 rounded-xl bg-slate-900 border border-emerald-500/50 text-sm text-white"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="flex items-center justify-end gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setTwoFactorStage('idle');
-                            setTwoFactorNewPassword('');
-                            setTwoFactorError(null);
-                          }}
-                          className="px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 cursor-pointer"
-                        >
-                          Abbrechen
-                        </button>
-                        <button
-                          type="submit"
-                          className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm shadow-lg shadow-emerald-500/20 cursor-pointer"
-                        >
-                          <Check className="w-4 h-4 stroke-[2.5]" />
-                          <span>Passwort & 2FA-E-Mail speichern</span>
-                        </button>
-                      </div>
-                    </form>
-                  )}
-                </div>
-              )}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
 
           {/* QR-Code für die Kellertür & Handy-Einladung */}
           <div className="lg:col-span-5 bg-slate-900 border border-slate-800 rounded-2xl p-5 flex flex-col items-center text-center space-y-4 self-start">

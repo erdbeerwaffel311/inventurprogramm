@@ -394,6 +394,10 @@ export const App: React.FC = () => {
                 remote.config.adminEmail !== undefined
                   ? remote.config.adminEmail
                   : currentSettings.adminEmail,
+              twoFactor:
+                remote.config.twoFactor !== undefined
+                  ? remote.config.twoFactor
+                  : currentSettings.twoFactor,
               allowedMembers: nextAllowedMembers,
               memberAccounts: nextMemberAccounts,
               projectLists: nextProjectLists,
