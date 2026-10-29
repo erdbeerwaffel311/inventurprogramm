@@ -227,9 +227,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   allowedMembers: DEFAULT_ALLOWED_MEMBERS,
   memberAccounts: DEFAULT_MEMBER_ACCOUNTS,
   projectLists: [],
-  supabaseUrl: import.meta.env.VITE_SUPABASE_URL || 'https://zdduvvluqairhnbdbunk.supabase.co',
-  supabaseAnonKey:
-    import.meta.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_CEjKQudAlYxYtTvykEwDxw_E4KvyUhC',
+  pocketbaseUrl:
+    import.meta.env.VITE_POCKETBASE_URL || 'https://api.keller.schuelerunion-vorarlberg.at',
   aiProvider: 'gemini',
   aiApiKey: '',
   commonEvents: ['Sommerfest', 'Vereinsabend', 'Arbeitseinsatz', 'Vorstandssitzung', 'Turnier / Spieltag'],

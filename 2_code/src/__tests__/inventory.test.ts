@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_ITEMS,
   DEFAULT_MEMBER_ACCOUNTS,
+  DEFAULT_SETTINGS,
   buildMemberUsername,
   normalizeUsernameForComparison,
 } from '../data/defaultData';
@@ -9,6 +10,11 @@ import { InventoryItem } from '../types';
 import { formatStockDisplay, toPrimaryUnitQuantity } from '../utils/units';
 import { parseFreeTextBlock } from '../utils/textParser';
 import { exportInventoryToCsv, parseInventoryCsv } from '../utils/csvHelper';
+import {
+  CONFIG_ROW_ID,
+  normalizePocketBaseUrl,
+  toPocketBaseId,
+} from '../utils/pocketbaseSync';
 
 const now = new Date().toISOString();
 
@@ -238,4 +244,30 @@ describe('Mitglieder-Login & Benutzernamen-Format (@schuelerunion.at)', () => {
     }
   });
 });
+
+describe('PocketBase-Konfiguration & 15-Zeichen Record-ID Konvertierung', () => {
+  it('verwendet standardmäßig https://api.keller.schuelerunion-vorarlberg.at als PocketBase-URL', () => {
+    expect(DEFAULT_SETTINGS.pocketbaseUrl).toBe(
+      'https://api.keller.schuelerunion-vorarlberg.at'
+    );
+    expect(
+      normalizePocketBaseUrl('https://api.keller.schuelerunion-vorarlberg.at/_/')
+    ).toBe('https://api.keller.schuelerunion-vorarlberg.at');
+  });
+
+  it('konvertiert App-IDs deterministisch in gültige 15-stellige PocketBase-IDs', () => {
+    const configPbId = toPocketBaseId(CONFIG_ROW_ID);
+    expect(configPbId).toBe('kellerconfig000');
+    expect(configPbId).toMatch(/^[a-z0-9]{15}$/);
+
+    const itemPbId = toPocketBaseId('item-1730214000123');
+    expect(itemPbId).toMatch(/^[a-z0-9]{15}$/);
+    expect(toPocketBaseId('item-1730214000123')).toBe(itemPbId);
+
+    const txPbId = toPocketBaseId('tx-inv-1730214000123');
+    expect(txPbId).toMatch(/^[a-z0-9]{15}$/);
+    expect(txPbId).not.toBe(itemPbId);
+  });
+});
+
 

@@ -153,8 +153,7 @@ export interface AppSettings {
   memberAccounts: MemberAccount[];
   /** Gespeicherte Kellerlisten / Projekte (ohne Bestandsabzug) */
   projectLists: KellerlisteProject[];
-  supabaseUrl: string;
-  supabaseAnonKey: string;
+  pocketbaseUrl: string;
   aiProvider: 'gemini' | 'openai';
   aiApiKey: string;
   commonEvents: string[];

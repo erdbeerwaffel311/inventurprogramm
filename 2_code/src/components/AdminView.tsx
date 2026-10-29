@@ -67,11 +67,9 @@ import {
 } from '../utils/csvHelper';
 import {
   buildShareableAppUrl,
-  getSupabaseClient,
-  sendAdmin2FAEmail,
-  SUPABASE_SETUP_SQL,
-  verifyAdmin2FACode,
-} from '../utils/supabaseSync';
+  getPocketBaseClient,
+  POCKETBASE_COLLECTIONS_INFO,
+} from '../utils/pocketbaseSync';
 import {
   formatBackupCodesForExport,
   generateBackupCodes,
@@ -340,15 +338,16 @@ export const AdminView: React.FC<AdminViewProps> = ({
     showBanner(`Passwort für „${memberName}“ wurde gespeichert!`);
   }
 
-  // Automatische Erkennung, falls der Nutzer auf den 2FA-Bestätigungslink in der E-Mail geklickt hat
+  // Automatische Erkennung, falls der Nutzer über PocketBase Auth eingeloggt wurde
   useEffect(() => {
-    const client = getSupabaseClient(settings);
+    const client = getPocketBaseClient(settings);
     if (!client || !settings.adminEmail) return;
 
-    const { data: sub } = client.auth.onAuthStateChange((event, session) => {
+    const unsubscribe = client.authStore.onChange((token, record) => {
+      const recordEmail = typeof record?.email === 'string' ? record.email : '';
       if (
-        (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') &&
-        session?.user?.email?.toLowerCase() === settings.adminEmail?.trim().toLowerCase()
+        token &&
+        recordEmail.toLowerCase() === settings.adminEmail?.trim().toLowerCase()
       ) {
         const params = new URLSearchParams(window.location.search);
         if (params.get('2fa') === 'verify' || window.location.hash.includes('access_token')) {
@@ -362,7 +361,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
     });
 
     return () => {
-      sub.subscription.unsubscribe();
+      unsubscribe();
     };
   }, [settings, isUnlocked]);
 
@@ -2038,40 +2037,25 @@ export const AdminView: React.FC<AdminViewProps> = ({
               <div>
                 <h3 className="font-bold text-white text-base flex items-center gap-2">
                   <Database className="w-5 h-5 text-sky-400" />
-                  <span>Kostenlose Cloud-Datenbank (Supabase) für Multi-Geräte-Sync</span>
+                  <span>PocketBase Server-Datenbank für Multi-Geräte-Sync</span>
                 </h3>
                 <p className="text-xs text-slate-400 mt-1">
-                  Damit alle Vereinsmitglieder von ihren eigenen Handys auf denselben Kellerbestand zugreifen können, kannst du hier ein kostenloses Supabase-Projekt (supabase.com) hinterlegen.
+                  Alle Geräte synchronisieren den Kellerbestand, Buchungen und Zugangsdaten über euren eigenen PocketBase-Server (Standard: <code className="text-sky-300">https://api.keller.schuelerunion-vorarlberg.at</code>).
                 </p>
               </div>
 
               <div className="space-y-3">
                 <div>
                   <label className="block text-xs text-slate-300 mb-1">
-                    Supabase Project URL (z. B. https://xyz.supabase.co)
+                    PocketBase API-URL
                   </label>
                   <input
                     type="url"
-                    value={settingsForm.supabaseUrl}
+                    value={settingsForm.pocketbaseUrl}
                     onChange={(e) =>
-                      setSettingsForm({ ...settingsForm, supabaseUrl: e.target.value })
+                      setSettingsForm({ ...settingsForm, pocketbaseUrl: e.target.value })
                     }
-                    placeholder="https://dein-projekt.supabase.co"
-                    className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs text-slate-300 mb-1">
-                    Supabase Anon / Public Key
-                  </label>
-                  <input
-                    type="password"
-                    value={settingsForm.supabaseAnonKey}
-                    onChange={(e) =>
-                      setSettingsForm({ ...settingsForm, supabaseAnonKey: e.target.value })
-                    }
-                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+                    placeholder="https://api.keller.schuelerunion-vorarlberg.at"
                     className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-700 text-sm text-white"
                   />
                 </div>
@@ -2080,7 +2064,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                   <button
                     type="button"
                     onClick={() => {
-                      navigator.clipboard.writeText(SUPABASE_SETUP_SQL);
+                      navigator.clipboard.writeText(POCKETBASE_COLLECTIONS_INFO);
                       setCopiedSql(true);
                       setTimeout(() => setCopiedSql(false), 3000);
                     }}
@@ -2089,12 +2073,12 @@ export const AdminView: React.FC<AdminViewProps> = ({
                     {copiedSql ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
                     <span>
                       {copiedSql
-                        ? 'SQL-Skript kopiert!'
-                        : 'SQL-Skript für Tabellen-Einrichtung kopieren'}
+                        ? 'PocketBase-Struktur kopiert!'
+                        : 'Collections-Übersicht für PocketBase kopieren'}
                     </span>
                   </button>
 
-                  {settings.supabaseUrl && settings.supabaseAnonKey && (
+                  {settings.pocketbaseUrl && (
                     <button
                       type="button"
                       onClick={onManualSync}
@@ -2102,7 +2086,7 @@ export const AdminView: React.FC<AdminViewProps> = ({
                       className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-xs font-semibold text-emerald-300 border border-emerald-500/40 cursor-pointer"
                     >
                       <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-                      <span>Jetzt mit Cloud synchronisieren</span>
+                      <span>Jetzt mit PocketBase synchronisieren</span>
                     </button>
                   )}
                 </div>

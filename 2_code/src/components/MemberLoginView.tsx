@@ -1,22 +1,25 @@
 import React, { useState, useMemo } from 'react';
 import { Lock, User, LogIn, AlertCircle } from 'lucide-react';
-import { MemberAccount } from '../types';
-import { normalizeUsernameForComparison } from '../data/defaultData';
+import { AppSettings, MemberAccount } from '../types';
+import { authenticateMemberWithPocketBase } from '../utils/pocketbaseSync';
 
 interface MemberLoginViewProps {
   clubName: string;
+  settings: AppSettings;
   memberAccounts: MemberAccount[];
   onLoginSuccess: (account: MemberAccount) => void;
 }
 
 export const MemberLoginView: React.FC<MemberLoginViewProps> = ({
   clubName,
+  settings,
   memberAccounts,
   onLoginSuccess,
 }) => {
   const [usernameInput, setUsernameInput] = useState('');
   const [passwordInput, setPasswordInput] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
 
   const matchingSuggestions = useMemo(() => {
@@ -33,37 +36,30 @@ export const MemberLoginView: React.FC<MemberLoginViewProps> = ({
       .slice(0, 6);
   }, [usernameInput, memberAccounts]);
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    const rawUser = usernameInput.trim();
-    const rawPass = passwordInput.trim();
-
-    if (!rawUser || !rawPass) {
-      setErrorMsg('Bitte gib deinen Benutzernamen und dein Passwort ein.');
-      return;
-    }
-
-    const withDomain = rawUser.includes('@') ? rawUser : `${rawUser}@schuelerunion.at`;
-    const normalizedInput = normalizeUsernameForComparison(withDomain);
-
-    const matchedAccount = memberAccounts.find(
-      (acc) => normalizeUsernameForComparison(acc.username) === normalizedInput
-    );
-
-    if (!matchedAccount) {
-      setErrorMsg(
-        'Dieser Benutzername ist nicht in der Liste der berechtigten Personen hinterlegt.'
-      );
-      return;
-    }
-
-    if (matchedAccount.password !== rawPass) {
-      setErrorMsg('Falsches Passwort. Bitte prüfe deine Eingabe.');
-      return;
-    }
-
     setErrorMsg(null);
-    onLoginSuccess(matchedAccount);
+    setIsLoggingIn(true);
+
+    try {
+      const result = await authenticateMemberWithPocketBase(
+        settings,
+        usernameInput,
+        passwordInput,
+        memberAccounts
+      );
+
+      if (result.error || !result.account) {
+        setErrorMsg(result.error || 'Anmeldung fehlgeschlagen.');
+        return;
+      }
+
+      onLoginSuccess(result.account);
+    } catch {
+      setErrorMsg('Fehler bei der Verbindung zum PocketBase-Server.');
+    } finally {
+      setIsLoggingIn(false);
+    }
   }
 
   return (
@@ -162,10 +158,11 @@ export const MemberLoginView: React.FC<MemberLoginViewProps> = ({
 
           <button
             type="submit"
-            className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 text-slate-950 font-bold text-sm shadow-lg shadow-sky-500/20 transition cursor-pointer"
+            disabled={isLoggingIn}
+            className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl bg-sky-500 hover:bg-sky-400 disabled:opacity-50 text-slate-950 font-bold text-sm shadow-lg shadow-sky-500/20 transition cursor-pointer"
           >
             <LogIn className="w-4 h-4 stroke-[2.5]" />
-            <span>Anmelden</span>
+            <span>{isLoggingIn ? 'Anmelden...' : 'Anmelden'}</span>
           </button>
         </form>
       </div>

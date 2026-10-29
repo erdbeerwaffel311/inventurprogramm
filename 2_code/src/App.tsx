@@ -22,14 +22,17 @@ import {
 } from './data/defaultData';
 import { roundStock, toPrimaryUnitQuantity } from './utils/units';
 import {
-  deleteItemFromSupabase,
-  getSupabaseClient,
-  normalizeSupabaseUrl,
-  pullFromSupabase,
-  pushConfigToSupabase,
-  pushToSupabase,
+  deleteItemFromPocketBase,
+  deleteTransactionFromPocketBase,
+  getPocketBaseClient,
+  logoutFromPocketBase,
+  normalizePocketBaseUrl,
+  pullFromPocketBase,
+  pushConfigToPocketBase,
+  pushToPocketBase,
+  toPocketBaseId,
   verifyAdmin2FACode,
-} from './utils/supabaseSync';
+} from './utils/pocketbaseSync';
 import { ActiveTab, Header } from './components/Header';
 import { OpenBookingView } from './components/OpenBookingView';
 import { KellerlisteView } from './components/KellerlisteView';
@@ -56,8 +59,12 @@ export const App: React.FC = () => {
       const saved = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       const parsed = saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : { ...DEFAULT_SETTINGS };
 
-      if (!parsed.supabaseUrl) parsed.supabaseUrl = DEFAULT_SETTINGS.supabaseUrl;
-      if (!parsed.supabaseAnonKey) parsed.supabaseAnonKey = DEFAULT_SETTINGS.supabaseAnonKey;
+      if (
+        !parsed.pocketbaseUrl ||
+        String(parsed.pocketbaseUrl).includes('supabase.co')
+      ) {
+        parsed.pocketbaseUrl = DEFAULT_SETTINGS.pocketbaseUrl;
+      }
       if (!Array.isArray(parsed.allowedMembers) || parsed.allowedMembers.length === 0) {
         parsed.allowedMembers = DEFAULT_ALLOWED_MEMBERS;
       }
@@ -69,25 +76,22 @@ export const App: React.FC = () => {
         parsed.projectLists = [];
       }
 
-      // Prüfe QR-Code / Einladungslink-Parameter (?dbUrl=...&dbKey=...&club=...)
+      // Prüfe QR-Code / Einladungslink-Parameter (?dbUrl=...&club=...)
       const params = new URLSearchParams(window.location.search);
       const urlDb = params.get('dbUrl');
-      const keyDb = params.get('dbKey');
       const clubParam = params.get('club');
 
-      if (urlDb && keyDb) {
-        parsed.supabaseUrl = urlDb;
-        parsed.supabaseAnonKey = keyDb;
+      if (urlDb && !urlDb.includes('supabase.co')) {
+        parsed.pocketbaseUrl = urlDb;
       }
       if (clubParam) {
         parsed.clubName = clubParam;
       }
 
-      // Automatisch "/rest/v1/" am Ende der URL entfernen, falls mitkopiert
-      parsed.supabaseUrl = normalizeSupabaseUrl(parsed.supabaseUrl);
+      parsed.pocketbaseUrl = normalizePocketBaseUrl(parsed.pocketbaseUrl);
 
       localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(parsed));
-      if (urlDb || keyDb || clubParam) {
+      if (urlDb || clubParam) {
         window.history.replaceState({}, document.title, window.location.pathname);
       }
 
@@ -136,19 +140,23 @@ export const App: React.FC = () => {
       return;
     }
 
-    const client = getSupabaseClient(settings);
+    const client = getPocketBaseClient(settings);
     if (!client) return;
 
     // 2. Intelligente Trennung: Prüfe, ob in der Datenbank ein frischer 2FA-Request für SiP vorliegt
     async function handleIncoming2FA() {
       try {
-        const { data } = await client!
-          .from('keller_items')
-          .select('id, payload')
-          .in('id', ['__app_config__', '__sip_users_config__']);
+        const sipPbId = toPocketBaseId('__sip_users_config__');
+        const appPbId = toPocketBaseId('__app_config__');
+        const records = await client!
+          .collection('keller_items')
+          .getFullList({
+            filter: `id = "${sipPbId}" || id = "${appPbId}"`,
+            requestKey: null,
+          });
 
-        const sipConfig = data?.find((d) => d.id === '__sip_users_config__')?.payload;
-        const appConfig = data?.find((d) => d.id === '__app_config__')?.payload;
+        const sipConfig = records?.find((d) => d.id === sipPbId)?.payload;
+        const appConfig = records?.find((d) => d.id === appPbId)?.payload;
 
         const now = Date.now();
         const sipExp = sipConfig?.twoFactorToken?.expiresAt
@@ -189,12 +197,13 @@ export const App: React.FC = () => {
     }
     handleIncoming2FA();
 
-    const { data: sub } = client.auth.onAuthStateChange(async (event, session) => {
+    const unsubscribe = client.authStore.onChange(async (token, record) => {
+      const recordEmail = typeof record?.email === 'string' ? record.email : '';
       if (
-        (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') &&
-        session?.user?.email &&
+        token &&
+        recordEmail &&
         (!settings.adminEmail ||
-          session.user.email.toLowerCase() === settings.adminEmail.trim().toLowerCase())
+          recordEmail.toLowerCase() === settings.adminEmail.trim().toLowerCase())
       ) {
         if (
           searchParams.get('source') === 'sip' ||
@@ -208,11 +217,9 @@ export const App: React.FC = () => {
         }
 
         try {
-          const { data } = await client!
-            .from('keller_items')
-            .select('id, payload')
-            .eq('id', '__sip_users_config__')
-            .maybeSingle();
+          const data = await client!
+            .collection('keller_items')
+            .getOne(toPocketBaseId('__sip_users_config__'), { requestKey: null });
           const sipExp = data?.payload?.twoFactorToken?.expiresAt
             ? new Date(data.payload.twoFactorToken.expiresAt).getTime()
             : 0;
@@ -232,7 +239,7 @@ export const App: React.FC = () => {
     });
 
     return () => {
-      sub.subscription.unsubscribe();
+      unsubscribe();
     };
   }, [settings]);
 
@@ -276,9 +283,7 @@ export const App: React.FC = () => {
     localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(settings));
   }, [settings]);
 
-  const hasCloudConfig = Boolean(
-    settings.supabaseUrl?.trim() && settings.supabaseAnonKey?.trim()
-  );
+  const hasCloudConfig = Boolean(settings.pocketbaseUrl?.trim());
 
   const unsyncedCount = useMemo(
     () => transactions.filter((t) => !t.synced).length,
@@ -288,11 +293,7 @@ export const App: React.FC = () => {
   // Cloud-Synchronisation (Push ausstehender Offline-Buchungen + Pull des aktuellen Bestands)
   const syncWithCloud = useCallback(
     async (currentItems = items, currentTxs = transactions, currentSettings = settings) => {
-      if (
-        !navigator.onLine ||
-        !currentSettings.supabaseUrl?.trim() ||
-        !currentSettings.supabaseAnonKey?.trim()
-      ) {
+      if (!navigator.onLine || !currentSettings.pocketbaseUrl?.trim()) {
         return;
       }
 
@@ -300,11 +301,11 @@ export const App: React.FC = () => {
       try {
         const hasUnsynced = currentTxs.some((t) => !t.synced);
         if (hasUnsynced) {
-          await pushToSupabase(currentSettings, currentItems, currentTxs);
+          await pushToPocketBase(currentSettings, currentItems, currentTxs);
           setTransactions((prev) => prev.map((tx) => ({ ...tx, synced: true })));
         }
 
-        const remote = await pullFromSupabase(currentSettings);
+        const remote = await pullFromPocketBase(currentSettings);
         if (remote) {
           const cleanRemoteItems = remote.items.filter(
             (i) => i && typeof i.id === 'string' && !i.id.startsWith('__') && !LEGACY_DEMO_ITEM_IDS.has(i.id)
@@ -410,11 +411,11 @@ export const App: React.FC = () => {
             setSettings(updatedSettings);
 
             if (localHadNewCustomCats || !remote.config.memberAccounts?.length) {
-              await pushConfigToSupabase(updatedSettings, remote.config.deletedCategoryIds || []);
+              await pushConfigToPocketBase(updatedSettings, remote.config.deletedCategoryIds || []);
             }
           } else {
-            // Noch kein __keller_config__ in Supabase vorhanden:
-            await pushConfigToSupabase(currentSettings);
+            // Noch kein __keller_config__ in PocketBase vorhanden:
+            await pushConfigToPocketBase(currentSettings);
           }
         }
       } catch {
@@ -646,7 +647,7 @@ export const App: React.FC = () => {
     setTransactions(nextTransactions);
 
     if (hasCloudConfig && navigator.onLine) {
-      pushToSupabase(settings, nextItems, nextTransactions)
+      pushToPocketBase(settings, nextItems, nextTransactions)
         .then((ok) => {
           if (ok) {
             setTransactions((prev) => prev.map((t) => ({ ...t, synced: true })));
@@ -706,7 +707,7 @@ export const App: React.FC = () => {
     setTransactions(nextTxs);
 
     if (hasCloudConfig && navigator.onLine) {
-      pushToSupabase(settings, nextItems, nextTxs).catch(() => {});
+      pushToPocketBase(settings, nextItems, nextTxs).catch(() => {});
     }
   }
 
@@ -731,7 +732,8 @@ export const App: React.FC = () => {
     setTransactions(nextTxs);
 
     if (hasCloudConfig && navigator.onLine) {
-      pushToSupabase(settings, nextItems, nextTxs).catch(() => {});
+      deleteTransactionFromPocketBase(settings, txId).catch(() => {});
+      pushToPocketBase(settings, nextItems, nextTxs).catch(() => {});
     }
   }
 
@@ -742,7 +744,7 @@ export const App: React.FC = () => {
       : [...items, item];
     setItems(nextItems);
     if (hasCloudConfig && navigator.onLine) {
-      pushToSupabase(settings, nextItems, transactions).catch(() => {});
+      pushToPocketBase(settings, nextItems, transactions).catch(() => {});
     }
   }
 
@@ -750,7 +752,7 @@ export const App: React.FC = () => {
     const nextItems = items.filter((i) => i.id !== itemId);
     setItems(nextItems);
     if (hasCloudConfig && navigator.onLine) {
-      deleteItemFromSupabase(settings, itemId).catch(() => {});
+      deleteItemFromPocketBase(settings, itemId).catch(() => {});
     }
   }
 
@@ -776,7 +778,7 @@ export const App: React.FC = () => {
     const nextTxs = [invTx, ...transactions];
     setTransactions(nextTxs);
     if (hasCloudConfig && navigator.onLine) {
-      pushToSupabase(nextSettings, newItems, nextTxs).catch(() => {});
+      pushToPocketBase(nextSettings, newItems, nextTxs).catch(() => {});
     }
   }
 
@@ -787,7 +789,7 @@ export const App: React.FC = () => {
     };
     setSettings(nextSettings);
     if (hasCloudConfig && navigator.onLine) {
-      pushConfigToSupabase(nextSettings).catch(() => {});
+      pushConfigToPocketBase(nextSettings).catch(() => {});
     }
   }
 
@@ -813,6 +815,7 @@ export const App: React.FC = () => {
     return (
       <MemberLoginView
         clubName={settings.clubName}
+        settings={settings}
         memberAccounts={activeMemberAccounts}
         onLoginSuccess={(account) => {
           setLoggedInMember(account);
@@ -841,6 +844,7 @@ export const App: React.FC = () => {
         onManualSync={() => syncWithCloud()}
         currentUserName={currentUserName}
         onLogout={() => {
+          logoutFromPocketBase(settings);
           setLoggedInMember(null);
           localStorage.removeItem(STORAGE_KEYS.LOGGED_IN_MEMBER);
           setIsAdminUnlocked(false);
@@ -904,8 +908,8 @@ export const App: React.FC = () => {
             onBulkImportItems={handleBulkImportItems}
             onUpdateSettings={(newSettings, deletedCatId) => {
               setSettings(newSettings);
-              if (newSettings.supabaseUrl && newSettings.supabaseAnonKey && navigator.onLine) {
-                pushConfigToSupabase(newSettings, deletedCatId ? [deletedCatId] : [])
+              if (newSettings.pocketbaseUrl && navigator.onLine) {
+                pushConfigToPocketBase(newSettings, deletedCatId ? [deletedCatId] : [])
                   .then(() => syncWithCloud(items, transactions, newSettings))
                   .catch(() => {});
               }
